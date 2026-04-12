@@ -39,25 +39,33 @@ export default function LoginPage() {
   };
   
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Sign in to your account
-          </h2>
-        </div>
-        
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded">
-              {error}
+    <div className="min-h-screen bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="w-full max-w-md">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl p-8 space-y-8">
+          {/* Logo & Header */}
+          <div className="text-center space-y-4">
+            <div className="flex justify-center">
+              <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600">
+                <span className="text-white font-bold text-xl">LG</span>
+              </div>
             </div>
-          )}
-          
-          <div className="rounded-md shadow-sm -space-y-px">
             <div>
-              <label htmlFor="email" className="sr-only">
-                Email address
+              <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Sign In</h2>
+              <p className="text-gray-600 dark:text-gray-400 text-sm mt-2">Welcome back to Lead Generator</p>
+            </div>
+          </div>
+          
+          {/* Form */}
+          <form className="space-y-6" onSubmit={handleSubmit}>
+            {error && (
+              <div className="bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 text-red-800 dark:text-red-200 px-4 py-3 rounded-lg animate-fade-in">
+                <p className="font-medium text-sm">{error}</p>
+              </div>
+            )}
+            
+            <div className="space-y-2">
+              <label htmlFor="email" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                Email Address
               </label>
               <input
                 id="email"
@@ -67,12 +75,13 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+                placeholder="you@example.com"
               />
             </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
+            
+            <div className="space-y-2">
+              <label htmlFor="password" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Password
               </label>
               <input
@@ -83,28 +92,45 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="Password"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+                placeholder="••••••••"
               />
             </div>
-          </div>
-          
-          <div>
+            
             <button
               type="submit"
               disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
+              className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl"
             >
-              {loading ? 'Signing in...' : 'Sign in'}
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="inline-block animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
+                  Signing in...
+                </span>
+              ) : (
+                'Sign In'
+              )}
             </button>
+          </form>
+          
+          {/* Divider */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300 dark:border-gray-600"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-3 bg-white dark:bg-slate-900 text-gray-600 dark:text-gray-400">Don't have an account?</span>
+            </div>
           </div>
           
-          <div className="text-center">
-            <Link href="/signup" className="text-blue-600 hover:text-blue-800">
-              Don't have an account? Sign up
-            </Link>
-          </div>
-        </form>
+          {/* Sign Up Link */}
+          <Link 
+            href="/signup"
+            className="w-full px-4 py-3 border-2 border-blue-500 text-blue-600 dark:text-blue-400 font-semibold rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors text-center block"
+          >
+            Create Account
+          </Link>
+        </div>
       </div>
     </div>
   );

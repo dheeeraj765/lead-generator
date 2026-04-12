@@ -52,44 +52,50 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
   };
   
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">Scrape New Leads</h2>
+    <div className="bg-white dark:bg-slate-900 rounded-xl shadow-card p-6 border border-gray-200 dark:border-gray-700">
+      <div className="mb-6">
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Scrape New Leads</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Enter your search criteria to find relevant business leads</p>
+      </div>
       
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label htmlFor="keyword" className="block text-sm font-medium text-gray-700 mb-1">
+          <div className="space-y-2">
+            <label htmlFor="keyword" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
               Keyword
+              <span className="text-red-500 ml-1">*</span>
             </label>
             <input
               type="text"
               id="keyword"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="e.g., dentist"
+              placeholder="e.g., dentist, plumber"
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
             />
           </div>
           
-          <div>
-            <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
+          <div className="space-y-2">
+            <label htmlFor="location" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
               Location
+              <span className="text-red-500 ml-1">*</span>
             </label>
             <input
               type="text"
               id="location"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              placeholder="e.g., Chicago"
+              placeholder="e.g., Chicago, IL"
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
             />
           </div>
           
-          <div>
-            <label htmlFor="limit" className="block text-sm font-medium text-gray-700 mb-1">
+          <div className="space-y-2">
+            <label htmlFor="limit" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
               Limit
+              <span className="text-red-500 ml-1">*</span>
             </label>
             <input
               type="number"
@@ -99,7 +105,7 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
               min="1"
               max="100"
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
             />
           </div>
         </div>
@@ -107,19 +113,33 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full md:w-auto px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          className="w-full md:w-auto px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg"
         >
-          {loading ? 'Scraping...' : 'Start Scraping'}
+          {loading ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="inline-block animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
+              Scraping...
+            </span>
+          ) : (
+            'Start Scraping'
+          )}
         </button>
       </form>
       
       {message && (
         <div
-          className={`mt-4 p-4 rounded-md ${
-            message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
+          className={`mt-6 p-4 rounded-lg border-l-4 animate-fade-in ${
+            message.type === 'success' 
+              ? 'bg-green-50 dark:bg-green-900/20 border-green-500 text-green-800 dark:text-green-200' 
+              : 'bg-red-50 dark:bg-red-900/20 border-red-500 text-red-800 dark:text-red-200'
           }`}
         >
-          {message.text}
+          <div className="flex items-start gap-3">
+            <span className="text-lg font-bold mt-0.5">
+              {message.type === 'success' ? '✓' : '!'}
+            </span>
+            <p className="font-semibold">{message.text}</p>
+          </div>
         </div>
       )}
     </div>
