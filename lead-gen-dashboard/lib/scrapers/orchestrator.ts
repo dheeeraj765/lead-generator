@@ -5,7 +5,7 @@
  * Flow: Scrape → Parse → Normalize → Deduplicate → Validate → Storage Ready
  */
 
-import type { ScrapedLead } from '@/app/types';
+import type { ScrapedLead } from '@/types';
 import WebScraper, { type ScraperConfig, type ScrapedPage } from './puppeteer-scraper';
 import LeadParser, { type RawLead } from './parser';
 import { normalizeLead, normalizeLeads, type NormalizedLead } from './normalizer';
@@ -129,9 +129,7 @@ export class LeadScrapeOrchestrator {
 
       // Step 3: Normalize data
       console.log('\n✨ Step 3: Normalizing data...');
-      const normalizedLeads = normalizeLead
-        ? normalizeLeads(rawLeads)
-        : rawLeads;
+      const normalizedLeads = normalizeLeads(rawLeads);
       this.stats.leadsAfterNormalization = normalizedLeads.length;
       this.stats.normalizationLoss =
         this.stats.rawLeadsExtracted - this.stats.leadsAfterNormalization;

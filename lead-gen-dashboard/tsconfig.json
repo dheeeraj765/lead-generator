@@ -20,7 +20,10 @@
     ],
     "paths": {
       "@/*": ["./app/*"],
-      "@/lib/scrapers/*": ["./lib/scrapers/*"]
+      "@/app/*": ["./app/*"],
+      "@/lib/*": ["./app/lib/*"],
+      "@/lib/scrapers/*": ["./lib/scrapers/*"],
+      "@/types": ["./app/types/index.ts"]
     }
   },
   "include": [
