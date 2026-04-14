@@ -44,7 +44,11 @@ export class LeadScrapeOrchestrator {
 
   constructor(scraperConfig?: ScraperConfig) {
     this.scraper = new AdaptiveScraper(scraperConfig);
-    this.stats = {
+    this.stats = this.createEmptyStats();
+  }
+
+  private createEmptyStats(): ScraperStats {
+    return {
       keyword: '',
       location: '',
       startTime: 0,
@@ -65,28 +69,14 @@ export class LeadScrapeOrchestrator {
 
   async scrapeLeads(options: ScrapeOptions): Promise<ScrapedLead[]> {
     this.stats = {
+      ...this.createEmptyStats(),
       keyword: options.keyword,
       location: options.location,
       startTime: Date.now(),
-      pagesScraped: 0,
-      pagesSuccessful: 0,
-      rawLeadsExtracted: 0,
-      leadsAfterNormalization: 0,
-      normalizationLoss: 0,
-      leadsAfterDeduplication: 0,
-      duplicatesRemoved: 0,
-      validLeadsCount: 0,
-      invalidLeadsCount: 0,
-      averageQualityScore: 0,
-      totalLeadsDelivered: 0,
-      pipelineEfficiency: 0,
     };
 
     try {
-      console.log('🚀 Starting lead scraping pipeline...');
-      console.log(`Keyword: ${options.keyword}`);
-      console.log(`Location: ${options.location}`);
-      console.log(`Limit: ${options.limit || 20}`);
+      console.log('[SCRAPE START]', options);
 
       await this.scraper.initialize();
 
@@ -94,13 +84,18 @@ export class LeadScrapeOrchestrator {
       this.stats.pagesScraped = scrapedPages.length;
       this.stats.pagesSuccessful = scrapedPages.length;
 
+      if (!scrapedPages.length) {
+        console.warn('[SCRAPER] No pages scraped');
+        return [];
+      }
+
       const rawLeads = this.parsePages(scrapedPages, options);
       this.stats.rawLeadsExtracted = rawLeads.length;
 
       const normalizedLeads = normalizeLeads(rawLeads);
       this.stats.leadsAfterNormalization = normalizedLeads.length;
       this.stats.normalizationLoss =
-        this.stats.rawLeadsExtracted - normalizedLeads.length;
+        rawLeads.length - normalizedLeads.length;
 
       const dedupedLeads = deduplicateLeads(
         normalizedLeads as NormalizedLead[],
@@ -133,7 +128,7 @@ export class LeadScrapeOrchestrator {
 
       const finalLeads = validLeads
         .slice(0, options.limit || validLeads.length)
-        .map((qs) => this.convertToScrapedLead(qs.lead, options));
+        .map((q) => this.convertToScrapedLead(q.lead, options));
 
       this.stats.totalLeadsDelivered = finalLeads.length;
       this.stats.endTime = Date.now();
@@ -141,16 +136,16 @@ export class LeadScrapeOrchestrator {
         this.stats.endTime - this.stats.startTime;
 
       this.stats.pipelineEfficiency =
-        this.stats.rawLeadsExtracted > 0
-          ? (finalLeads.length / this.stats.rawLeadsExtracted) * 100
+        rawLeads.length > 0
+          ? (finalLeads.length / rawLeads.length) * 100
           : 0;
 
       this.printSummary();
 
       return finalLeads;
     } catch (error) {
-      console.error('❌ Pipeline error:', error);
-      throw error;
+      console.error('[PIPELINE ERROR]', error);
+      return [];
     } finally {
       await this.scraper.close();
     }
@@ -160,15 +155,18 @@ export class LeadScrapeOrchestrator {
     options: ScrapeOptions
   ): Promise<ScrapedPage[]> {
     try {
-      const page = await this.scraper.scrapePage(
-        `https://example.com/search?keyword=${encodeURIComponent(
-          options.keyword
-        )}&location=${encodeURIComponent(options.location)}`
-      );
+      const query = `${options.keyword} ${options.location}`;
+      const url = `https://www.justdial.com/search?q=${encodeURIComponent(
+        query
+      )}`;
+
+      console.log('[SCRAPER URL]', url);
+
+      const page = await this.scraper.scrapePage(url);
 
       return [page];
     } catch (error) {
-      console.error('Error scraping pages:', error);
+      console.error('[SCRAPE PAGE ERROR]', error);
       return [];
     }
   }
@@ -181,13 +179,20 @@ export class LeadScrapeOrchestrator {
     keyword: string;
     location: string;
   })[] {
-    const allLeads = [];
+    const allLeads: (RawLead & {
+      sourceUrl: string;
+      keyword: string;
+      location: string;
+    })[] = [];
 
     for (const page of pages) {
       try {
-        let leads = LeadParser.parseJustdial(page.html, page.url);
+        let leads = LeadParser.parseJustdial(
+          page.html,
+          page.url
+        );
 
-        if (leads.length === 0) {
+        if (!leads.length) {
           leads = LeadParser.parseLeadsList(page.html, {
             container: '.listing, .result, .item',
             name: 'h2, .title, .name',
@@ -197,16 +202,16 @@ export class LeadScrapeOrchestrator {
           });
         }
 
-        const enrichedLeads = leads.map((lead) => ({
+        const enriched = leads.map((lead) => ({
           ...lead,
           sourceUrl: page.url,
           keyword: options.keyword,
           location: options.location,
         }));
 
-        allLeads.push(...enrichedLeads);
+        allLeads.push(...enriched);
       } catch (error) {
-        console.error('Error parsing page:', error);
+        console.error('[PARSE ERROR]', error);
       }
     }
 
@@ -229,17 +234,14 @@ export class LeadScrapeOrchestrator {
   }
 
   private printSummary(): void {
-    const scraperMethod = this.scraper.getMethod();
-    const scraperInfo = this.scraper.getInfo();
+    const info = this.scraper.getInfo();
 
     console.log('='.repeat(60));
     console.log('SCRAPING PIPELINE SUMMARY');
     console.log('='.repeat(60));
-    console.log(
-      `Scraper: ${scraperMethod.toUpperCase()} (${scraperInfo.capabilities.cost})`
-    );
+    console.log(`Method: ${info.method}`);
     console.log(`Duration: ${this.stats.duration}ms`);
-    console.log(`Final leads: ${this.stats.totalLeadsDelivered}`);
+    console.log(`Leads: ${this.stats.totalLeadsDelivered}`);
     console.log(
       `Efficiency: ${this.stats.pipelineEfficiency.toFixed(1)}%`
     );
