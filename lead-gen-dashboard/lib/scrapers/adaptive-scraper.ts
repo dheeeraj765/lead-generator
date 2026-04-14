@@ -14,8 +14,9 @@ export interface ScraperConfig {
   timeout?: number;
   delayBetweenRequests?: number;
   maxRetries?: number;
+  fallbackToCheerio?: boolean;
+  forceMethod?: 'cheerio' | 'puppeteer';
   userAgent?: string;
-  forceMethod?: 'cheerio' | 'puppeteer'; // Override auto-detection for testing
 }
 
 export class AdaptiveScraper {
@@ -24,91 +25,80 @@ export class AdaptiveScraper {
   private method: 'cheerio' | 'puppeteer';
 
   constructor(config: ScraperConfig = {}) {
-    this.config = config;
+    this.config = {
+      fallbackToCheerio: false,
+      ...config,
+    };
 
-    // Auto-detect environment
     const isServerless =
-      config.forceMethod === 'cheerio' ||
-      (!!process.env.VERCEL ||
-        !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
-        process.env.NODE_ENV === 'production');
+      this.config.forceMethod === 'cheerio' ||
+      this.config.fallbackToCheerio ||
+      !!process.env.VERCEL ||
+      !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.NODE_ENV === 'production';
 
-    this.method = config.forceMethod || (isServerless ? 'cheerio' : 'puppeteer');
+    this.method =
+      this.config.forceMethod ||
+      (isServerless ? 'cheerio' : 'puppeteer');
 
     console.log(
-      `[ADAPTIVE SCRAPER] Using ${this.method} method in ${process.env.NODE_ENV || 'local'} environment`
+      `[ADAPTIVE SCRAPER] Using ${this.method} method in ${
+        process.env.NODE_ENV || 'local'
+      } environment`
     );
 
     if (this.method === 'cheerio') {
       this.scraper = new CheerioScraper({
-        timeout: config.timeout ?? 15000,
-        delayBetweenRequests: config.delayBetweenRequests ?? 500,
-        maxRetries: config.maxRetries ?? 2,
-        userAgent: config.userAgent,
+        timeout: this.config.timeout ?? 15000,
+        delayBetweenRequests:
+          this.config.delayBetweenRequests ?? 500,
+        maxRetries: this.config.maxRetries ?? 2,
+        userAgent: this.config.userAgent,
       });
     } else {
       this.scraper = new WebScraper({
-        headless: config.headless ?? true,
-        timeout: config.timeout ?? 30000,
-        delayBetweenRequests: config.delayBetweenRequests ?? 1000,
-        maxRetries: config.maxRetries ?? 2,
-        userAgent: config.userAgent,
+        headless: this.config.headless ?? true,
+        timeout: this.config.timeout ?? 30000,
+        delayBetweenRequests:
+          this.config.delayBetweenRequests ?? 1000,
+        maxRetries: this.config.maxRetries ?? 2,
+        userAgent: this.config.userAgent,
       });
     }
   }
 
-  /**
-   * Get which scraper method is being used
-   */
   getMethod(): 'cheerio' | 'puppeteer' {
     return this.method;
   }
 
-  /**
-   * Initialize if needed (Puppeteer requires this)
-   */
   async initialize(): Promise<void> {
     if (this.method === 'puppeteer') {
       await (this.scraper as WebScraper).initialize();
     }
-    // Cheerio doesn't need initialization
   }
 
-  /**
-   * Close if needed (Puppeteer requires this)
-   */
   async close(): Promise<void> {
     if (this.method === 'puppeteer') {
       await (this.scraper as WebScraper).close();
     }
-    // Cheerio doesn't need cleanup
   }
 
-  /**
-   * Scrape a single page
-   */
   async scrapePage(url: string): Promise<ScrapedPage> {
     if (this.method === 'puppeteer') {
       return (this.scraper as WebScraper).scrapePage(url);
-    } else {
-      return (this.scraper as CheerioScraper).scrapePage(url);
     }
+
+    return (this.scraper as CheerioScraper).scrapePage(url);
   }
 
-  /**
-   * Scrape multiple pages
-   */
   async scrapePages(urls: string[]): Promise<ScrapedPage[]> {
     if (this.method === 'puppeteer') {
       return (this.scraper as WebScraper).scrapePages(urls);
-    } else {
-      return (this.scraper as CheerioScraper).scrapePages(urls);
     }
+
+    return (this.scraper as CheerioScraper).scrapePages(urls);
   }
 
-  /**
-   * Get scraper info for debugging
-   */
   getInfo() {
     return {
       method: this.method,
@@ -118,7 +108,10 @@ export class AdaptiveScraper {
       capabilities: {
         dynamicContent: this.method === 'puppeteer',
         needsBrowser: this.method === 'puppeteer',
-        cost: this.method === 'cheerio' ? 'FREE' : 'FREE (local only)',
+        cost:
+          this.method === 'cheerio'
+            ? 'FREE'
+            : 'FREE (local only)',
       },
     };
   }

@@ -1,31 +1,19 @@
-/**
- * Lead Scraper Orchestrator - Main pipeline coordinator
- * Combines all modules: scraper, parser, normalizer, deduplicator, validator
- * 
- * Flow: Scrape → Parse → Normalize → Deduplicate → Validate → Storage Ready
- * 
- * Supports two scraping backends (Auto-detected):
- * 1. Puppeteer (local/Docker) - Full browser automation, dynamic content
- * 2. Cheerio (Vercel/serverless) - Lightweight HTTP-based scraping, FREE
- */
-
 import type { ScrapedLead } from '@/types';
 import AdaptiveScraper, { type ScraperConfig } from './adaptive-scraper';
 import type { ScrapedPage } from './puppeteer-scraper';
 import LeadParser, { type RawLead } from './parser';
-import { normalizeLead, normalizeLeads, type NormalizedLead } from './normalizer';
-import { deduplicateLeads, type DuplicateMatch } from './deduplicator';
 import {
-  validateLead,
-  filterLeadsByQuality,
-  type LeadQualityScore,
-} from './validator';
+  normalizeLeads,
+  type NormalizedLead,
+} from './normalizer';
+import { deduplicateLeads } from './deduplicator';
+import { filterLeadsByQuality } from './validator';
 
 export interface ScrapeOptions {
   keyword: string;
   location: string;
   limit?: number;
-  mindQualityScore?: number;
+  minQualityScore?: number;
   requirePhone?: boolean;
   requireAddress?: boolean;
 }
@@ -36,30 +24,18 @@ export interface ScraperStats {
   startTime: number;
   endTime?: number;
   duration?: number;
-
-  // Scraping stats
   pagesScraped: number;
   pagesSuccessful: number;
-
-  // Parsing stats
   rawLeadsExtracted: number;
-
-  // Normalization stats
   leadsAfterNormalization: number;
   normalizationLoss: number;
-
-  // Deduplication stats
   leadsAfterDeduplication: number;
   duplicatesRemoved: number;
-
-  // Validation stats
   validLeadsCount: number;
   invalidLeadsCount: number;
   averageQualityScore: number;
-
-  // Final stats
   totalLeadsDelivered: number;
-  pipelineEfficiency: number; // percentage of raw → final leads
+  pipelineEfficiency: number;
 }
 
 export class LeadScrapeOrchestrator {
@@ -87,12 +63,6 @@ export class LeadScrapeOrchestrator {
     };
   }
 
-  /**
-   * Main scraping pipeline
-   * keyword: e.g., "dentist"
-   * location: e.g., "Kolhapur" or "Mumbai"
-   * limit: maximum leads to return
-   */
   async scrapeLeads(options: ScrapeOptions): Promise<ScrapedLead[]> {
     this.stats = {
       keyword: options.keyword,
@@ -113,72 +83,68 @@ export class LeadScrapeOrchestrator {
     };
 
     try {
-      // Initialize browser
       console.log('🚀 Starting lead scraping pipeline...');
-      console.log(`   Keyword: ${options.keyword}`);
-      console.log(`   Location: ${options.location}`);
-      console.log(`   Limit: ${options.limit || 'unlimited'}`);
+      console.log(`Keyword: ${options.keyword}`);
+      console.log(`Location: ${options.location}`);
+      console.log(`Limit: ${options.limit || 20}`);
 
       await this.scraper.initialize();
 
-      // Step 1: Scrape pages
-      console.log('\n📄 Step 1: Scraping pages...');
       const scrapedPages = await this.scrapePages(options);
       this.stats.pagesScraped = scrapedPages.length;
       this.stats.pagesSuccessful = scrapedPages.length;
 
-      // Step 2: Parse HTML → Extract raw leads
-      console.log('\n🔍 Step 2: Parsing HTML...');
       const rawLeads = this.parsePages(scrapedPages, options);
       this.stats.rawLeadsExtracted = rawLeads.length;
 
-      // Step 3: Normalize data
-      console.log('\n✨ Step 3: Normalizing data...');
       const normalizedLeads = normalizeLeads(rawLeads);
       this.stats.leadsAfterNormalization = normalizedLeads.length;
       this.stats.normalizationLoss =
-        this.stats.rawLeadsExtracted - this.stats.leadsAfterNormalization;
+        this.stats.rawLeadsExtracted - normalizedLeads.length;
 
-      // Step 4: Deduplicate
-      console.log('\n🔄 Step 4: Deduplicating leads...');
-      const dedupedLeads = deduplicateLeads(normalizedLeads as NormalizedLead[], {
-        nameSimilarityThreshold: 0.85,
-      });
+      const dedupedLeads = deduplicateLeads(
+        normalizedLeads as NormalizedLead[],
+        {
+          nameSimilarityThreshold: 0.85,
+        }
+      );
+
       this.stats.leadsAfterDeduplication = dedupedLeads.length;
       this.stats.duplicatesRemoved =
-        this.stats.leadsAfterNormalization - this.stats.leadsAfterDeduplication;
+        normalizedLeads.length - dedupedLeads.length;
 
-      // Step 5: Validate and filter by quality
-      console.log('\n✅ Step 5: Validating lead quality...');
       const qualityScores = filterLeadsByQuality(dedupedLeads, {
-        minQualityScore: options.mindQualityScore ?? 50,
+        minQualityScore: options.minQualityScore ?? 50,
         requirePhone: options.requirePhone ?? false,
         requireAddress: options.requireAddress ?? false,
       });
 
       const validLeads = qualityScores.filter((q) => q.isValid);
+
       this.stats.validLeadsCount = validLeads.length;
       this.stats.invalidLeadsCount =
         qualityScores.length - validLeads.length;
+
       this.stats.averageQualityScore =
         validLeads.length > 0
-          ? validLeads.reduce((sum, q) => sum + q.score, 0) / validLeads.length
+          ? validLeads.reduce((sum, q) => sum + q.score, 0) /
+            validLeads.length
           : 0;
 
-      // Step 6: Apply limit and return
       const finalLeads = validLeads
         .slice(0, options.limit || validLeads.length)
         .map((qs) => this.convertToScrapedLead(qs.lead, options));
 
       this.stats.totalLeadsDelivered = finalLeads.length;
       this.stats.endTime = Date.now();
-      this.stats.duration = this.stats.endTime - this.stats.startTime;
+      this.stats.duration =
+        this.stats.endTime - this.stats.startTime;
+
       this.stats.pipelineEfficiency =
         this.stats.rawLeadsExtracted > 0
-          ? (this.stats.totalLeadsDelivered / this.stats.rawLeadsExtracted) * 100
+          ? (finalLeads.length / this.stats.rawLeadsExtracted) * 100
           : 0;
 
-      // Print summary
       this.printSummary();
 
       return finalLeads;
@@ -190,18 +156,10 @@ export class LeadScrapeOrchestrator {
     }
   }
 
-  /**
-   * Scrape multiple pages
-   * Customize based on target website's pagination
-   */
-  private async scrapePages(options: ScrapeOptions): Promise<ScrapedPage[]> {
+  private async scrapePages(
+    options: ScrapeOptions
+  ): Promise<ScrapedPage[]> {
     try {
-      // For demonstration, scrape a single page
-      // In production, estimate number of pages needed
-      const estimatedPages = Math.ceil((options.limit || 20) / 10);
-
-      // Currently scrapes Justdial format with hardcoded URLs
-      // You should customize this based on your target site
       const page = await this.scraper.scrapePage(
         `https://example.com/search?keyword=${encodeURIComponent(
           options.keyword
@@ -215,26 +173,20 @@ export class LeadScrapeOrchestrator {
     }
   }
 
-  /**
-   * Parse all scraped pages
-   */
   private parsePages(
     pages: ScrapedPage[],
     options: ScrapeOptions
-  ): (RawLead & { sourceUrl: string; keyword: string; location: string })[] {
-    const allLeads: (RawLead & {
-      sourceUrl: string;
-      keyword: string;
-      location: string;
-    })[] = [];
+  ): (RawLead & {
+    sourceUrl: string;
+    keyword: string;
+    location: string;
+  })[] {
+    const allLeads = [];
 
     for (const page of pages) {
       try {
-        // Try Justdial-specific parsing first
-        const justdialLeads = LeadParser.parseJustdial(page.html, page.url);
+        let leads = LeadParser.parseJustdial(page.html, page.url);
 
-        // If no leads found, try generic parsing
-        let leads = justdialLeads;
         if (leads.length === 0) {
           leads = LeadParser.parseLeadsList(page.html, {
             container: '.listing, .result, .item',
@@ -245,7 +197,6 @@ export class LeadScrapeOrchestrator {
           });
         }
 
-        // Enrich leads with metadata
         const enrichedLeads = leads.map((lead) => ({
           ...lead,
           sourceUrl: page.url,
@@ -262,9 +213,6 @@ export class LeadScrapeOrchestrator {
     return allLeads;
   }
 
-  /**
-   * Convert normalized lead to ScrapedLead format
-   */
   private convertToScrapedLead(
     lead: NormalizedLead,
     options: ScrapeOptions
@@ -280,43 +228,24 @@ export class LeadScrapeOrchestrator {
     };
   }
 
-  /**
-   * Print pipeline summary
-   */
   private printSummary(): void {
     const scraperMethod = this.scraper.getMethod();
     const scraperInfo = this.scraper.getInfo();
-    
-    console.log('\n' + '='.repeat(60));
-    console.log('📊 SCRAPING PIPELINE SUMMARY');
+
     console.log('='.repeat(60));
-    console.log(`🔧 Scraper Method: ${scraperMethod.toUpperCase()} (${scraperInfo.capabilities.cost})`);
-    console.log(`⏱️  Duration: ${this.stats.duration}ms`);
-    console.log(`📄 Pages Scraped: ${this.stats.pagesSuccessful}/${this.stats.pagesScraped}`);
+    console.log('SCRAPING PIPELINE SUMMARY');
+    console.log('='.repeat(60));
     console.log(
-      `🔍 Raw Leads Extracted: ${this.stats.rawLeadsExtracted}`
+      `Scraper: ${scraperMethod.toUpperCase()} (${scraperInfo.capabilities.cost})`
     );
+    console.log(`Duration: ${this.stats.duration}ms`);
+    console.log(`Final leads: ${this.stats.totalLeadsDelivered}`);
     console.log(
-      `✨ After Normalization: ${this.stats.leadsAfterNormalization} (lost: ${this.stats.normalizationLoss})`
+      `Efficiency: ${this.stats.pipelineEfficiency.toFixed(1)}%`
     );
-    console.log(
-      `🔄 After Deduplication: ${this.stats.leadsAfterDeduplication} (removed: ${this.stats.duplicatesRemoved})`
-    );
-    console.log(
-      `✅ After Validation: ${this.stats.validLeadsCount} valid (avg score: ${this.stats.averageQualityScore.toFixed(1)}/100)`
-    );
-    console.log(
-      `📤 Final Delivery: ${this.stats.totalLeadsDelivered} leads`
-    );
-    console.log(
-      `🎯 Pipeline Efficiency: ${this.stats.pipelineEfficiency.toFixed(1)}%`
-    );
-    console.log('='.repeat(60) + '\n');
+    console.log('='.repeat(60));
   }
 
-  /**
-   * Get current pipeline statistics
-   */
   getStats(): ScraperStats {
     return this.stats;
   }
