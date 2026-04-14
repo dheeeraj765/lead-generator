@@ -86,8 +86,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       requirePhone: scrapeRequest.requirePhone,
       requireAddress: scrapeRequest.requireAddress,
     });
-
-    // Verify user exists in database
     const dbUser = await prisma.user.findUnique({
       where: { email: user.email },
     });
@@ -172,16 +170,39 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch (error) {
     console.error('[SCRAPE ERROR]', error);
 
+    const errorMessage =
+      error instanceof Error ? error.message : 'Unknown error during scraping';
+
+    // Check if this is a browser launch error on Vercel
+    const isBrowserError =
+      errorMessage.includes('Chrome') ||
+      errorMessage.includes('Chromium') ||
+      errorMessage.includes('browser') ||
+      errorMessage.includes('not found');
+
+    if (isBrowserError && process.env.VERCEL) {
+      return NextResponse.json(
+        {
+          success: false,
+          inserted: 0,
+          duplicatesSkipped: 0,
+          leads: [],
+          error:
+            'Puppeteer (browser automation) is not available on Vercel serverless. ' +
+            'Recommended solutions: (1) Run locally for testing, (2) Use a scraping API service (Firecrawl, ScraperAPI), ' +
+            '(3) Deploy to an environment with browser support (Docker, dedicated server), or (4) Use API-based data sources instead of scraping.',
+        },
+        { status: 502 }
+      );
+    }
+
     return NextResponse.json(
       {
         success: false,
         inserted: 0,
         duplicatesSkipped: 0,
         leads: [],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unknown error during scraping',
+        error: errorMessage,
       },
       { status: 500 }
     );
@@ -200,9 +221,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const isVercel = !!process.env.VERCEL;
+
   return NextResponse.json({
-    status: 'ready',
-    message: 'POST to this endpoint to start a scraping job',
+    status: isVercel ? 'limited' : 'ready',
+    environment: process.env.VERCEL_ENV || 'local',
+    message: isVercel
+      ? 'Scraping requires a browser. Vercel serverless does not support Puppeteer. See SCRAPING_VERCEL_SETUP.md for solutions.'
+      : 'POST to this endpoint to start a scraping job',
+    limitations: isVercel
+      ? [
+          'Puppeteer/browser automation not available on Vercel serverless',
+          'Recommended: Use Firecrawl API or run locally',
+          'See SCRAPING_VERCEL_SETUP.md for detailed setup instructions',
+        ]
+      : [],
     documentation: {
       endpoint: '/api/leads/scrape',
       method: 'POST',
@@ -211,9 +244,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         keyword: 'string - Business type (e.g., "dentist", "plumber")',
         location: 'string - Geographic location (e.g., "Kolhapur", "Delhi")',
         limit: 'number - Max leads to return (1-500, default: 20)',
-        minQualityScore: 'number - Minimum quality score 0-100 (default: 50)',
-        requirePhone: 'boolean - Only leads with phone numbers (default: false)',
-        requireAddress: 'boolean - Only leads with addresses (default: false)',
+        minQualityScore:
+          'number - Minimum quality score 0-100 (default: 50)',
+        requirePhone:
+          'boolean - Only leads with phone numbers (default: false)',
+        requireAddress:
+          'boolean - Only leads with addresses (default: false)',
       },
       example: {
         keyword: 'plumber',
@@ -222,6 +258,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         minQualityScore: 60,
         requirePhone: true,
       },
+      setupInstructions: isVercel
+        ? 'https://github.com/dheeeraj765/lead-generator/blob/main/SCRAPING_VERCEL_SETUP.md'
+        : undefined,
     },
   });
 }

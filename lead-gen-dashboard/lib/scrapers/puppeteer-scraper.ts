@@ -48,7 +48,7 @@ export class WebScraper {
       const extra = require('puppeteer-extra');
       extra.use(StealthPlugin());
 
-      this.browser = await extra.launch({
+      const launchOptions: any = {
         headless: this.config.headless,
         args: [
           '--no-sandbox',
@@ -61,11 +61,25 @@ export class WebScraper {
           '--disable-notifications',
           '--disable-popup-blocking',
         ],
-      });
+      };
+
+      // For serverless environments (Vercel, AWS Lambda, etc.)
+      if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+        // Disable GPU and other resource-intensive features
+        launchOptions.args.push('--disable-gpu', '--disable-software-rasterizer');
+      }
+
+      this.browser = await extra.launch(launchOptions);
 
       console.log('Browser initialized successfully');
     } catch (error) {
       console.error('Failed to initialize browser:', error);
+      // Log more details for debugging
+      console.error('Environment:', {
+        NODE_ENV: process.env.NODE_ENV,
+        VERCEL: !!process.env.VERCEL,
+        VERCEL_ENV: process.env.VERCEL_ENV,
+      });
       throw error;
     }
   }
