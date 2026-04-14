@@ -1,93 +1,230 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { requireAuth } from '@/lib/auth';
-import { scrapeLeads } from '@/lib/scraper';
-import { scrapeSchema } from '@/lib/validators';
-import { ScrapeResult } from '@/types';
+/**
+ * API Route: /api/leads/scrape
+ * 
+ * Starts a web scraping job to collect leads from business directories
+ * Part of the modular scraping pipeline (parser → normalizer → deduplicator → validator)
+ */
 
-export async function POST(request: NextRequest) {
+import { NextRequest, NextResponse } from 'next/server';
+import { getUserFromSession } from '@/lib/auth';
+import LeadScrapeOrchestrator from '@/lib/scrapers/orchestrator';
+import { prisma } from '@/lib/db';
+import type { ScrapeResult } from '@/types';
+import { z } from 'zod';
+
+// Request validation schema
+const ScrapeRequestSchema = z.object({
+  keyword: z.string().min(2).max(100),
+  location: z.string().min(2).max(100),
+  limit: z.number().int().min(1).max(500).optional().default(20),
+  minQualityScore: z.number().min(0).max(100).optional().default(50),
+  requirePhone: z.boolean().optional().default(false),
+  requireAddress: z.boolean().optional().default(false),
+});
+
+type ScrapeRequest = z.infer<typeof ScrapeRequestSchema>;
+
+/**
+ * POST handler for initiating scraping job
+ */
+export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const user = await requireAuth();
-    const body = await request.json();
-    const { keyword, location, limit } = scrapeSchema.parse(body);
-    
-    // Scrape leads
-    const scrapedLeads = await scrapeLeads(keyword, location, limit);
-    
-    let inserted = 0;
-    let duplicatesSkipped = 0;
-    const savedLeads = [];
-    
-    // Process each lead
-    for (const lead of scrapedLeads) {
-      // Check for duplicates
-      const existingLead = await prisma.lead.findFirst({
-        where: {
-          userId: user.id,
-          OR: [
-            lead.website ? { website: lead.website } : {},
-            lead.phone ? { phone: lead.phone } : {},
-            {
-              AND: [
-                { businessName: lead.businessName },
-                { location: lead.location },
-              ],
-            },
-          ].filter(condition => Object.keys(condition).length > 0),
-        },
-      });
-      
-      if (existingLead) {
-        duplicatesSkipped++;
-        continue;
-      }
-      
-      // Save new lead
-      const savedLead = await prisma.lead.create({
-        data: {
-          userId: user.id,
-          businessName: lead.businessName,
-          website: lead.website,
-          phone: lead.phone,
-          address: lead.address,
-          sourceUrl: lead.sourceUrl,
-          keyword: lead.keyword,
-          location: lead.location,
-        },
-      });
-      
-      inserted++;
-      savedLeads.push(savedLead);
-    }
-    
-    const result: ScrapeResult = {
-      success: true,
-      inserted,
-      duplicatesSkipped,
-      leads: savedLeads,
-    };
-    
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error('Scrape error:', error);
-    
-    if (error instanceof Error && error.message === 'Unauthorized') {
+    // Verify user authentication
+    const user = await getUserFromSession();
+    if (!user?.email) {
       return NextResponse.json(
-        { error: 'Unauthorized' },
+        { error: 'Authentication required' },
         { status: 401 }
       );
     }
-    
-    if (error instanceof Error && error.name === 'ZodError') {
+
+    // Parse and validate request body
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
       return NextResponse.json(
-        { error: 'Invalid input data' },
+        { error: 'Invalid JSON in request body' },
         { status: 400 }
       );
     }
-    
+
+    let scrapeRequest: ScrapeRequest;
+    try {
+      scrapeRequest = ScrapeRequestSchema.parse(body);
+    } catch (validationError) {
+      if (validationError instanceof z.ZodError) {
+        return NextResponse.json(
+          {
+            error: 'Validation failed',
+            details: validationError.issues,
+          },
+          { status: 400 }
+        );
+      }
+      throw validationError;
+    }
+
+    console.log(
+      `[SCRAPE] User ${user.email} requested: ${scrapeRequest.keyword} in ${scrapeRequest.location}`
+    );
+
+    // Initialize orchestrator with anti-detection measures
+    const orchestrator = new LeadScrapeOrchestrator({
+      headless: true,
+      timeout: 60000,
+      delayBetweenRequests: 2000, // 2 second delay between requests to avoid blocking
+      maxRetries: 2,
+    });
+
+    // Run scraping pipeline
+    const leads = await orchestrator.scrapeLeads({
+      keyword: scrapeRequest.keyword,
+      location: scrapeRequest.location,
+      limit: scrapeRequest.limit,
+      mindQualityScore: scrapeRequest.minQualityScore,
+      requirePhone: scrapeRequest.requirePhone,
+      requireAddress: scrapeRequest.requireAddress,
+    });
+
+    // Verify user exists in database
+    const dbUser = await prisma.user.findUnique({
+      where: { email: user.email },
+    });
+
+    if (!dbUser) {
+      return NextResponse.json(
+        { error: 'User not found' },
+        { status: 404 }
+      );
+    }
+
+    // Check for duplicates before insertion
+    let insertedCount = 0;
+    let duplicatesSkipped = 0;
+    const savedLeads = [];
+
+    for (const lead of leads) {
+      try {
+        // Check if lead already exists (by business name + phone or website)
+        const existing = await prisma.lead.findFirst({
+          where: {
+            userId: dbUser.id,
+            OR: [
+              {
+                businessName: lead.businessName,
+                phone: lead.phone || null,
+              },
+              {
+                website: lead.website || null,
+              },
+            ],
+          },
+        });
+
+        if (existing) {
+          duplicatesSkipped++;
+          console.log(
+            `[DUPLICATE] Skipping: ${lead.businessName} (already in database)`
+          );
+          continue;
+        }
+
+        // Insert lead into database
+        const savedLead = await prisma.lead.create({
+          data: {
+            userId: dbUser.id,
+            businessName: lead.businessName,
+            phone: lead.phone || null,
+            address: lead.address || null,
+            website: lead.website || null,
+            sourceUrl: lead.sourceUrl,
+            keyword: lead.keyword,
+            location: lead.location,
+          },
+        });
+
+        insertedCount++;
+        savedLeads.push(savedLead);
+      } catch (error) {
+        console.error('Error inserting lead:', error);
+        // Continue with next lead on error
+      }
+    }
+
+    const stats = orchestrator.getStats();
+
+    const response: ScrapeResult = {
+      success: true,
+      inserted: insertedCount,
+      duplicatesSkipped,
+      leads: savedLeads,
+    };
+
+    console.log(
+      `[SCRAPE COMPLETE] Inserted: ${insertedCount}, Duplicates: ${duplicatesSkipped}`
+    );
+
+    return NextResponse.json({
+      ...response,
+      stats,
+    });
+  } catch (error) {
+    console.error('[SCRAPE ERROR]', error);
+
     return NextResponse.json(
-      { error: 'Failed to scrape leads' },
+      {
+        success: false,
+        inserted: 0,
+        duplicatesSkipped: 0,
+        leads: [],
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Unknown error during scraping',
+      },
       { status: 500 }
     );
   }
 }
+
+/**
+ * GET handler - returns scraping status and API documentation
+ */
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const user = await getUserFromSession();
+  if (!user?.email) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
+  return NextResponse.json({
+    status: 'ready',
+    message: 'POST to this endpoint to start a scraping job',
+    documentation: {
+      endpoint: '/api/leads/scrape',
+      method: 'POST',
+      description: 'Scrape business leads from web directories',
+      request: {
+        keyword: 'string - Business type (e.g., "dentist", "plumber")',
+        location: 'string - Geographic location (e.g., "Kolhapur", "Delhi")',
+        limit: 'number - Max leads to return (1-500, default: 20)',
+        minQualityScore: 'number - Minimum quality score 0-100 (default: 50)',
+        requirePhone: 'boolean - Only leads with phone numbers (default: false)',
+        requireAddress: 'boolean - Only leads with addresses (default: false)',
+      },
+      example: {
+        keyword: 'plumber',
+        location: 'Delhi',
+        limit: 50,
+        minQualityScore: 60,
+        requirePhone: true,
+      },
+    },
+  });
+}
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5 minute timeout for scraping
