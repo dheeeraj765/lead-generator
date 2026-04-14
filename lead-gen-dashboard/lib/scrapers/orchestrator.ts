@@ -3,10 +3,15 @@
  * Combines all modules: scraper, parser, normalizer, deduplicator, validator
  * 
  * Flow: Scrape → Parse → Normalize → Deduplicate → Validate → Storage Ready
+ * 
+ * Supports two scraping backends (Auto-detected):
+ * 1. Puppeteer (local/Docker) - Full browser automation, dynamic content
+ * 2. Cheerio (Vercel/serverless) - Lightweight HTTP-based scraping, FREE
  */
 
 import type { ScrapedLead } from '@/types';
-import WebScraper, { type ScraperConfig, type ScrapedPage } from './puppeteer-scraper';
+import AdaptiveScraper, { type ScraperConfig } from './adaptive-scraper';
+import type { ScrapedPage } from './puppeteer-scraper';
 import LeadParser, { type RawLead } from './parser';
 import { normalizeLead, normalizeLeads, type NormalizedLead } from './normalizer';
 import { deduplicateLeads, type DuplicateMatch } from './deduplicator';
@@ -58,11 +63,11 @@ export interface ScraperStats {
 }
 
 export class LeadScrapeOrchestrator {
-  private scraper: WebScraper;
+  private scraper: AdaptiveScraper;
   private stats: ScraperStats;
 
   constructor(scraperConfig?: ScraperConfig) {
-    this.scraper = new WebScraper(scraperConfig);
+    this.scraper = new AdaptiveScraper(scraperConfig);
     this.stats = {
       keyword: '',
       location: '',
@@ -279,9 +284,13 @@ export class LeadScrapeOrchestrator {
    * Print pipeline summary
    */
   private printSummary(): void {
+    const scraperMethod = this.scraper.getMethod();
+    const scraperInfo = this.scraper.getInfo();
+    
     console.log('\n' + '='.repeat(60));
     console.log('📊 SCRAPING PIPELINE SUMMARY');
     console.log('='.repeat(60));
+    console.log(`🔧 Scraper Method: ${scraperMethod.toUpperCase()} (${scraperInfo.capabilities.cost})`);
     console.log(`⏱️  Duration: ${this.stats.duration}ms`);
     console.log(`📄 Pages Scraped: ${this.stats.pagesSuccessful}/${this.stats.pagesScraped}`);
     console.log(
