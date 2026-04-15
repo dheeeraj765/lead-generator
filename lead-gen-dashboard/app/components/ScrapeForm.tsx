@@ -14,7 +14,9 @@ type ApiResponse = {
   count?: number;
 };
 
-export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
+export default function ScrapeForm({
+  onScrapeComplete,
+}: ScrapeFormProps) {
   const [keyword, setKeyword] = useState('');
   const [location, setLocation] = useState('');
   const [limit, setLimit] = useState(20);
@@ -43,6 +45,7 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
         credentials: 'include',
         body: JSON.stringify({
@@ -53,18 +56,33 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
       });
 
       const rawText = await response.text();
+      const contentType = response.headers.get('content-type') || '';
+
+      // 🚨 HTML returned instead of JSON
+      if (
+        rawText.trim().startsWith('<!DOCTYPE html>') ||
+        contentType.includes('text/html')
+      ) {
+        console.error('HTML ERROR RESPONSE:', rawText);
+
+        throw new Error(
+          'Server returned an HTML error page. This usually means auth middleware, server crash, or deployment issue.'
+        );
+      }
 
       let data: ApiResponse;
 
       try {
         data = JSON.parse(rawText);
       } catch {
+        console.error('INVALID RAW RESPONSE:', rawText);
+
         throw new Error(
-          `Server returned invalid response: ${rawText.slice(0, 200)}`
+          `Server returned invalid JSON: ${rawText.slice(0, 200)}`
         );
       }
 
-      if (!response.ok) {
+      if (!response.ok || data.success === false) {
         throw new Error(data.error || 'Scraping failed');
       }
 
@@ -123,7 +141,7 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
               onChange={(e) => setKeyword(e.target.value)}
               placeholder="e.g., dentist, plumber"
               required
-              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white"
             />
           </div>
 
@@ -142,7 +160,7 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
               onChange={(e) => setLocation(e.target.value)}
               placeholder="e.g., Chicago, IL"
               required
-              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white"
             />
           </div>
 
@@ -152,7 +170,6 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
               className="block text-sm font-semibold text-gray-700 dark:text-gray-300"
             >
               Limit
-              <span className="text-red-500 ml-1">*</span>
             </label>
             <input
               type="number"
@@ -168,7 +185,7 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
               min="1"
               max="100"
               required
-              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+              className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-slate-800 dark:text-white"
             />
           </div>
         </div>
@@ -176,33 +193,21 @@ export default function ScrapeForm({ onScrapeComplete }: ScrapeFormProps) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full md:w-auto px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg"
+          className="w-full md:w-auto px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg disabled:opacity-50"
         >
-          {loading ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="inline-block animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
-              Scraping...
-            </span>
-          ) : (
-            'Start Scraping'
-          )}
+          {loading ? 'Scraping...' : 'Start Scraping'}
         </button>
       </form>
 
       {message && (
         <div
-          className={`mt-6 p-4 rounded-lg border-l-4 animate-fade-in ${
+          className={`mt-6 p-4 rounded-lg border-l-4 ${
             message.type === 'success'
               ? 'bg-green-50 dark:bg-green-900/20 border-green-500 text-green-800 dark:text-green-200'
               : 'bg-red-50 dark:bg-red-900/20 border-red-500 text-red-800 dark:text-red-200'
           }`}
         >
-          <div className="flex items-start gap-3">
-            <span className="text-lg font-bold mt-0.5">
-              {message.type === 'success' ? '✓' : '!'}
-            </span>
-            <p className="font-semibold">{message.text}</p>
-          </div>
+          <p className="font-semibold">{message.text}</p>
         </div>
       )}
     </div>
