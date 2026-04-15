@@ -19,12 +19,34 @@ export async function POST(request: NextRequest) {
 
     if (!user?.email) {
       return NextResponse.json(
-        { error: 'Authentication required' },
+        {
+          success: false,
+          inserted: 0,
+          duplicatesSkipped: 0,
+          leads: [],
+          error: 'Authentication required',
+        },
         { status: 401 }
       );
     }
 
-    const body = await request.json();
+    let body: unknown;
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        {
+          success: false,
+          inserted: 0,
+          duplicatesSkipped: 0,
+          leads: [],
+          error: 'Invalid request JSON',
+        },
+        { status: 400 }
+      );
+    }
+
     const scrapeRequest = ScrapeRequestSchema.parse(body);
 
     const isVercel = !!process.env.VERCEL;
@@ -52,7 +74,13 @@ export async function POST(request: NextRequest) {
 
     if (!dbUser) {
       return NextResponse.json(
-        { error: 'User not found' },
+        {
+          success: false,
+          inserted: 0,
+          duplicatesSkipped: 0,
+          leads: [],
+          error: 'User not found',
+        },
         { status: 404 }
       );
     }
@@ -62,41 +90,45 @@ export async function POST(request: NextRequest) {
     const savedLeads = [];
 
     for (const lead of leads) {
-      const existing = await prisma.lead.findFirst({
-        where: {
-          userId: dbUser.id,
-          OR: [
-            {
-              businessName: lead.businessName,
-              phone: lead.phone || null,
-            },
-            {
-              website: lead.website || null,
-            },
-          ],
-        },
-      });
+      try {
+        const existing = await prisma.lead.findFirst({
+          where: {
+            userId: dbUser.id,
+            OR: [
+              {
+                businessName: lead.businessName,
+                phone: lead.phone || null,
+              },
+              {
+                website: lead.website || null,
+              },
+            ],
+          },
+        });
 
-      if (existing) {
-        duplicatesSkipped++;
-        continue;
+        if (existing) {
+          duplicatesSkipped++;
+          continue;
+        }
+
+        const saved = await prisma.lead.create({
+          data: {
+            userId: dbUser.id,
+            businessName: lead.businessName,
+            phone: lead.phone || null,
+            address: lead.address || null,
+            website: lead.website || null,
+            sourceUrl: lead.sourceUrl,
+            keyword: lead.keyword,
+            location: lead.location,
+          },
+        });
+
+        savedLeads.push(saved);
+        inserted++;
+      } catch (insertError) {
+        console.error('[LEAD INSERT ERROR]', insertError);
       }
-
-      const saved = await prisma.lead.create({
-        data: {
-          userId: dbUser.id,
-          businessName: lead.businessName,
-          phone: lead.phone || null,
-          address: lead.address || null,
-          website: lead.website || null,
-          sourceUrl: lead.sourceUrl,
-          keyword: lead.keyword,
-          location: lead.location,
-        },
-      });
-
-      savedLeads.push(saved);
-      inserted++;
     }
 
     return NextResponse.json({
@@ -104,6 +136,7 @@ export async function POST(request: NextRequest) {
       inserted,
       duplicatesSkipped,
       leads: savedLeads,
+      stats: orchestrator.getStats(),
     });
   } catch (error) {
     console.error('[SCRAPE ERROR]', error);
