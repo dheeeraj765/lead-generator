@@ -23,10 +23,6 @@ import { normalizeLeads } from "./normalizer";
 import { deduplicateLeads } from "./deduplicator";
 import { filterLeadsByQuality } from "./validator";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
 export interface ScrapeOptions {
   keyword: string;
   location: string;
@@ -66,10 +62,6 @@ interface RawLeadWithMeta {
   location: string;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Nominatim geocoder
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface BBox {
   south: number;
   west: number;
@@ -107,92 +99,89 @@ async function geocodeLocation(location: string): Promise<BBox | null> {
 
   const hit = data[0];
 
-  // boundingbox order from Nominatim: [south, north, west, east]
   if (hit.boundingbox && hit.boundingbox.length === 4) {
     const bbox: BBox = {
       south: parseFloat(hit.boundingbox[0]),
       north: parseFloat(hit.boundingbox[1]),
-      west:  parseFloat(hit.boundingbox[2]),
-      east:  parseFloat(hit.boundingbox[3]),
+      west: parseFloat(hit.boundingbox[2]),
+      east: parseFloat(hit.boundingbox[3]),
     };
 
-    // If the bbox is too large (e.g. whole country), shrink to ~50 km radius
     const latSpan = bbox.north - bbox.south;
     const lonSpan = bbox.east - bbox.west;
+
     if (latSpan > 1.0 || lonSpan > 1.0) {
       const lat = (bbox.south + bbox.north) / 2;
       const lon = (bbox.west + bbox.east) / 2;
-      const delta = 0.45; // ~50 km
+      const delta = 2.0; // FIXED: was 0.45, too small for country searches
+
       return {
         south: lat - delta,
         north: lat + delta,
-        west:  lon - delta,
-        east:  lon + delta,
+        west: lon - delta,
+        east: lon + delta,
       };
     }
 
     return bbox;
   }
 
-  // Fallback: build a ~20 km box around the centre point
   if (hit.lat && hit.lon) {
     const lat = parseFloat(hit.lat);
     const lon = parseFloat(hit.lon);
     const delta = 0.18;
+
     return {
       south: lat - delta,
       north: lat + delta,
-      west:  lon - delta,
-      east:  lon + delta,
+      west: lon - delta,
+      east: lon + delta,
     };
   }
 
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Keyword → OSM tag mapping
-// ─────────────────────────────────────────────────────────────────────────────
-
 function keywordToOsmFilters(keyword: string): string[] {
   const kw = keyword.toLowerCase().trim();
 
   const MAP: Record<string, string[]> = {
-    dentist:     ['node["amenity"="dentist"]',        'way["amenity"="dentist"]'],
-    doctor:      ['node["amenity"="doctors"]',         'way["amenity"="doctors"]'],
-    hospital:    ['node["amenity"="hospital"]',        'way["amenity"="hospital"]'],
-    clinic:      ['node["amenity"="clinic"]',          'way["amenity"="clinic"]'],
-    pharmacy:    ['node["amenity"="pharmacy"]',        'way["amenity"="pharmacy"]'],
-    restaurant:  ['node["amenity"="restaurant"]',      'way["amenity"="restaurant"]'],
-    cafe:        ['node["amenity"="cafe"]',            'way["amenity"="cafe"]'],
-    hotel:       ['node["tourism"="hotel"]',           'way["tourism"="hotel"]'],
-    gym:         ['node["leisure"="fitness_centre"]',  'way["leisure"="fitness_centre"]'],
-    bank:        ['node["amenity"="bank"]',            'way["amenity"="bank"]'],
-    lawyer:      ['node["office"="lawyer"]',           'way["office"="lawyer"]'],
-    school:      ['node["amenity"="school"]',          'way["amenity"="school"]'],
-    supermarket: ['node["shop"="supermarket"]',        'way["shop"="supermarket"]'],
-    salon:       ['node["shop"="hairdresser"]',        'way["shop"="hairdresser"]'],
-    plumber:     ['node["craft"="plumber"]',           'way["craft"="plumber"]'],
-    electrician: ['node["craft"="electrician"]',       'way["craft"="electrician"]'],
-    accountant:  ['node["office"="accountant"]',       'way["office"="accountant"]'],
-    shop:        ['node["shop"]',                      'way["shop"]'],
+    dentist: ['node["amenity"="dentist"]', 'way["amenity"="dentist"]'],
+    doctor: ['node["amenity"="doctors"]', 'way["amenity"="doctors"]'],
+    hospital: ['node["amenity"="hospital"]', 'way["amenity"="hospital"]'],
+    clinic: ['node["amenity"="clinic"]', 'way["amenity"="clinic"]'],
+    pharmacy: ['node["amenity"="pharmacy"]', 'way["amenity"="pharmacy"]'],
+    restaurant: ['node["amenity"="restaurant"]', 'way["amenity"="restaurant"]'],
+    cafe: ['node["amenity"="cafe"]', 'way["amenity"="cafe"]'],
+    hotel: ['node["tourism"="hotel"]', 'way["tourism"="hotel"]'],
+    gym: [
+      'node["leisure"="fitness_centre"]',
+      'way["leisure"="fitness_centre"]',
+    ],
+    bank: ['node["amenity"="bank"]', 'way["amenity"="bank"]'],
+    lawyer: ['node["office"="lawyer"]', 'way["office"="lawyer"]'],
+    school: ['node["amenity"="school"]', 'way["amenity"="school"]'],
+    supermarket: ['node["shop"="supermarket"]', 'way["shop"="supermarket"]'],
+    salon: ['node["shop"="hairdresser"]', 'way["shop"="hairdresser"]'],
+    plumber: ['node["craft"="plumber"]', 'way["craft"="plumber"]'],
+    electrician: [
+      'node["craft"="electrician"]',
+      'way["craft"="electrician"]',
+    ],
+    accountant: ['node["office"="accountant"]', 'way["office"="accountant"]'],
+    shop: ['node["shop"]', 'way["shop"]'],
   };
 
   for (const [key, filters] of Object.entries(MAP)) {
-    if (kw === key || kw.includes(key)) return filters;
+    if (kw === key || kw.includes(key)) {
+      return filters;
+    }
   }
 
-  // Generic: search by name tag (case-insensitive regex)
   const safe = keyword.replace(/[^a-zA-Z0-9 ]/g, "");
-  return [
-    `node["name"~"${safe}",i]`,
-    `way["name"~"${safe}",i]`,
-  ];
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Overpass query
-// ─────────────────────────────────────────────────────────────────────────────
+  return [`node["name"~"${safe}",i]`, `way["name"~"${safe}",i]`];
+}
 
 interface OsmElement {
   type: string;
@@ -207,7 +196,9 @@ async function queryOverpass(
 ): Promise<OsmElement[]> {
   const bboxStr = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
   const unionLines = filters.map((f) => `  ${f}(${bboxStr});`).join("\n");
-  const query = `[out:json][timeout:25];\n(\n${unionLines}\n);\nout body ${limit * 5};`;
+  const query = `[out:json][timeout:25];\n(\n${unionLines}\n);\nout body ${
+    limit * 5
+  };`;
 
   console.log("[OVERPASS] bbox:", bboxStr);
 
@@ -228,10 +219,6 @@ async function queryOverpass(
   return json.elements ?? [];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OSM element → RawLeadWithMeta
-// ─────────────────────────────────────────────────────────────────────────────
-
 function osmElementToLead(
   el: OsmElement,
   keyword: string,
@@ -241,7 +228,10 @@ function osmElementToLead(
 
   const businessName =
     tags["name"] ?? tags["brand"] ?? tags["operator"] ?? undefined;
-  if (!businessName) return null;
+
+  if (!businessName) {
+    return null;
+  }
 
   const phone =
     tags["phone"] ??
@@ -258,13 +248,11 @@ function osmElementToLead(
     tags["addr:state"],
     tags["addr:postcode"],
   ].filter(Boolean);
+
   const address = addrParts.length ? addrParts.join(", ") : undefined;
 
   const website =
-    tags["website"] ??
-    tags["contact:website"] ??
-    tags["url"] ??
-    undefined;
+    tags["website"] ?? tags["contact:website"] ?? tags["url"] ?? undefined;
 
   return {
     businessName,
@@ -277,12 +265,7 @@ function osmElementToLead(
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Orchestrator
-// ─────────────────────────────────────────────────────────────────────────────
-
 export class LeadScrapeOrchestrator {
-  // scraperConfig kept for API compatibility — unused (no browser / HTTP scraping)
   private _scraperConfig: ScraperConfig | undefined;
   private stats: ScraperStats;
 
@@ -322,28 +305,27 @@ export class LeadScrapeOrchestrator {
     try {
       console.log("[SCRAPE START]", options);
 
-      // 1. Geocode
       const bbox = await geocodeLocation(options.location);
+
       if (!bbox) {
         console.warn("[SCRAPER] Could not geocode:", options.location);
         return [];
       }
+
       this.stats.pagesScraped++;
 
-      // 2. Keyword → OSM filters
       const filters = keywordToOsmFilters(options.keyword);
       console.log("[SCRAPER] OSM filters:", filters);
 
-      // 3. Overpass query
       const limit = options.limit ?? 20;
       const elements = await queryOverpass(bbox, filters, limit);
+
       this.stats.pagesSuccessful++;
       console.log(`[SCRAPER] ${elements.length} OSM elements returned`);
 
-      // 4. Convert
       const rawLeads: RawLeadWithMeta[] = elements
         .map((el) => osmElementToLead(el, options.keyword, options.location))
-        .filter((l): l is RawLeadWithMeta => l !== null);
+        .filter((lead): lead is RawLeadWithMeta => lead !== null);
 
       this.stats.rawLeadsExtracted = rawLeads.length;
 
@@ -352,21 +334,20 @@ export class LeadScrapeOrchestrator {
         return [];
       }
 
-      // 5. Normalise
       const normalizedLeads = normalizeLeads(rawLeads);
+
       this.stats.leadsAfterNormalization = normalizedLeads.length;
       this.stats.normalizationLoss = rawLeads.length - normalizedLeads.length;
 
-      // 6. Deduplicate
       const dedupedLeads = deduplicateLeads(
         normalizedLeads as NormalizedLead[],
         { nameSimilarityThreshold: 0.85 }
       );
-      this.stats.leadsAfterDeduplication = dedupedLeads.length;
-      this.stats.duplicatesRemoved = normalizedLeads.length - dedupedLeads.length;
 
-      // 7. Quality filter — lower threshold (30) because OSM entries often
-      //    lack phone/website but are still valid business leads
+      this.stats.leadsAfterDeduplication = dedupedLeads.length;
+      this.stats.duplicatesRemoved =
+        normalizedLeads.length - dedupedLeads.length;
+
       const qualityScores = filterLeadsByQuality(dedupedLeads, {
         minQualityScore: options.minQualityScore ?? 30,
         requirePhone: options.requirePhone ?? false,
@@ -374,14 +355,17 @@ export class LeadScrapeOrchestrator {
       });
 
       const validLeads = qualityScores.filter((q) => q.isValid);
+
       this.stats.validLeadsCount = validLeads.length;
-      this.stats.invalidLeadsCount = qualityScores.length - validLeads.length;
+      this.stats.invalidLeadsCount =
+        qualityScores.length - validLeads.length;
+
       this.stats.averageQualityScore =
         validLeads.length > 0
-          ? validLeads.reduce((sum, q) => sum + q.score, 0) / validLeads.length
+          ? validLeads.reduce((sum, q) => sum + q.score, 0) /
+            validLeads.length
           : 0;
 
-      // 8. Slice to limit
       const finalLeads = validLeads
         .slice(0, limit)
         .map((q) => this.convertToScrapedLead(q.lead, options));
@@ -389,12 +373,14 @@ export class LeadScrapeOrchestrator {
       this.stats.totalLeadsDelivered = finalLeads.length;
       this.stats.endTime = Date.now();
       this.stats.duration = this.stats.endTime - this.stats.startTime;
+
       this.stats.pipelineEfficiency =
         rawLeads.length > 0
           ? (finalLeads.length / rawLeads.length) * 100
           : 0;
 
       this.printSummary();
+
       return finalLeads;
     } catch (error) {
       console.error("[PIPELINE ERROR]", error);

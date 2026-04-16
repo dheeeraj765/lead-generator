@@ -8,7 +8,7 @@ const ScrapeRequestSchema = z.object({
   keyword: z.string().min(2).max(100),
   location: z.string().min(2).max(100),
   limit: z.number().int().min(1).max(500).optional().default(20),
-  minQualityScore: z.number().min(0).max(100).optional().default(50),
+  minQualityScore: z.number().min(0).max(100).optional().default(30),
   requirePhone: z.boolean().optional().default(false),
   requireAddress: z.boolean().optional().default(false),
 });
@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     let body: unknown;
+
     try {
       body = await request.json();
     } catch {
@@ -47,6 +48,7 @@ export async function POST(request: NextRequest) {
     }
 
     let scrapeRequest: z.infer<typeof ScrapeRequestSchema>;
+
     try {
       scrapeRequest = ScrapeRequestSchema.parse(body);
     } catch (err) {
@@ -56,7 +58,10 @@ export async function POST(request: NextRequest) {
           inserted: 0,
           duplicatesSkipped: 0,
           leads: [],
-          error: err instanceof Error ? err.message : "Invalid request parameters",
+          error:
+            err instanceof Error
+              ? err.message
+              : "Invalid request parameters",
         },
         { status: 422 }
       );
@@ -69,8 +74,8 @@ export async function POST(request: NextRequest) {
       timeout: 20000,
       delayBetweenRequests: 1000,
       maxRetries: 2,
-      // Always use Cheerio on Vercel; use Puppeteer locally only if not production
-      fallbackToCheerio: isVercel || process.env.NODE_ENV === "production",
+      fallbackToCheerio:
+        isVercel || process.env.NODE_ENV === "production",
     });
 
     const leads = await orchestrator.scrapeLeads({
@@ -105,9 +110,6 @@ export async function POST(request: NextRequest) {
 
     for (const lead of leads) {
       try {
-        // Build the OR conditions carefully — a null website should NOT match
-        // other leads with a null website, otherwise every no-website lead is
-        // treated as a duplicate of every other one.
         const orConditions: object[] = [
           {
             businessName: lead.businessName,
@@ -160,6 +162,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[SCRAPE ERROR]", error);
+
     return NextResponse.json(
       {
         success: false,
@@ -174,7 +177,4 @@ export async function POST(request: NextRequest) {
 }
 
 export const dynamic = "force-dynamic";
-
-// FIX: was 300 — Vercel Hobby plan hard-caps serverless functions at 60 s.
-// Setting it to 300 on a free plan causes silent deployment issues.
 export const maxDuration = 60;
