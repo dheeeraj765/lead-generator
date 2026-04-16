@@ -13,6 +13,8 @@ const ScrapeRequestSchema = z.object({
   requireAddress: z.boolean().optional().default(false),
 });
 
+type ScrapeRequest = z.infer<typeof ScrapeRequestSchema>;
+
 export async function POST(request: NextRequest) {
   try {
     const user = await getUserFromSession();
@@ -47,7 +49,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let scrapeRequest: z.infer<typeof ScrapeRequestSchema>;
+    let scrapeRequest: ScrapeRequest;
 
     try {
       scrapeRequest = ScrapeRequestSchema.parse(body);
@@ -67,15 +69,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const isVercel = !!process.env.VERCEL;
-
     const orchestrator = new LeadScrapeOrchestrator({
       headless: true,
       timeout: 20000,
       delayBetweenRequests: 1000,
       maxRetries: 2,
       fallbackToCheerio:
-        isVercel || process.env.NODE_ENV === "production",
+        !!process.env.VERCEL || process.env.NODE_ENV === "production",
     });
 
     const leads = await orchestrator.scrapeLeads({
@@ -86,6 +86,8 @@ export async function POST(request: NextRequest) {
       requirePhone: scrapeRequest.requirePhone,
       requireAddress: scrapeRequest.requireAddress,
     });
+
+    console.log("[API] Leads scraped:", leads.length);
 
     const dbUser = await prisma.user.findUnique({
       where: { email: user.email },
@@ -110,15 +112,26 @@ export async function POST(request: NextRequest) {
 
     for (const lead of leads) {
       try {
-        const orConditions: object[] = [
-          {
+        const orConditions: object[] = [];
+
+        if (lead.phone) {
+          orConditions.push({
             businessName: lead.businessName,
-            phone: lead.phone ?? null,
-          },
-        ];
+            phone: lead.phone,
+          });
+        }
 
         if (lead.website) {
-          orConditions.push({ website: lead.website });
+          orConditions.push({
+            website: lead.website,
+          });
+        }
+
+        if (!orConditions.length) {
+          orConditions.push({
+            businessName: lead.businessName,
+            address: lead.address ?? null,
+          });
         }
 
         const existing = await prisma.lead.findFirst({
@@ -148,6 +161,8 @@ export async function POST(request: NextRequest) {
 
         savedLeads.push(saved);
         inserted++;
+
+        console.log("[DB INSERTED]", saved.businessName);
       } catch (insertError) {
         console.error("[LEAD INSERT ERROR]", insertError);
       }
