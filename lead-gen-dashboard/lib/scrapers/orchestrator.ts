@@ -1,19 +1,6 @@
 /**
- * Scraping Orchestrator
- *
- * Data source: OpenStreetMap Overpass API  (https://overpass-api.de)
- * ─────────────────────────────────────────────────────────────────
- * • 100 % free — no API key required
- * • Returns JSON — no HTML parsing, no CSS selectors to maintain
- * • Works from any serverless environment (Vercel, Lambda, etc.)
- * • No bot-detection issues — it's a public data API
- *
- * Strategy
- * ────────
- * 1. Geocode the user's location string → bounding box  (Nominatim)
- * 2. Map the keyword to OSM amenity/shop/office tags
- * 3. Query Overpass for all matching nodes/ways inside that bbox
- * 4. Feed raw results through the existing normalise → dedupe → quality pipeline
+ * lib/scrapers/orchestrator.ts
+ * OpenStreetMap lead scraping orchestrator
  */
 
 import type { ScrapedLead } from "@/types";
@@ -69,20 +56,28 @@ interface BBox {
   east: number;
 }
 
+interface OsmElement {
+  type: string;
+  id: number;
+  tags?: Record<string, string>;
+}
+
 async function geocodeLocation(location: string): Promise<BBox | null> {
   const url =
-    `https://nominatim.openstreetmap.org/search` +
-    `?q=${encodeURIComponent(location)}&format=json&limit=1`;
+    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      location
+    )}&format=json&limit=1`;
 
   const res = await fetch(url, {
     headers: {
-      "User-Agent": "LeadGeneratorApp/1.0 (contact@example.com)",
       Accept: "application/json",
+      "User-Agent": "LeadGeneratorApp/1.0",
     },
+    cache: "no-store",
   });
 
   if (!res.ok) {
-    console.error("[GEOCODE] Nominatim error", res.status);
+    console.error("[GEOCODE ERROR]", res.status);
     return null;
   }
 
@@ -93,43 +88,38 @@ async function geocodeLocation(location: string): Promise<BBox | null> {
   }>;
 
   if (!data.length) {
-    console.warn("[GEOCODE] No results for:", location);
     return null;
   }
 
   const hit = data[0];
 
-  if (hit.boundingbox && hit.boundingbox.length === 4) {
-    const bbox: BBox = {
-      south: parseFloat(hit.boundingbox[0]),
-      north: parseFloat(hit.boundingbox[1]),
-      west: parseFloat(hit.boundingbox[2]),
-      east: parseFloat(hit.boundingbox[3]),
-    };
+  if (hit.boundingbox?.length === 4) {
+    let south = parseFloat(hit.boundingbox[0]);
+    let north = parseFloat(hit.boundingbox[1]);
+    let west = parseFloat(hit.boundingbox[2]);
+    let east = parseFloat(hit.boundingbox[3]);
 
-    const latSpan = bbox.north - bbox.south;
-    const lonSpan = bbox.east - bbox.west;
+    const latSpan = north - south;
+    const lonSpan = east - west;
 
-    if (latSpan > 1.0 || lonSpan > 1.0) {
-      const lat = (bbox.south + bbox.north) / 2;
-      const lon = (bbox.west + bbox.east) / 2;
-      const delta = 2.0; // FIXED: was 0.45, too small for country searches
+    if (latSpan > 1 || lonSpan > 1) {
+      const centerLat = (south + north) / 2;
+      const centerLon = (west + east) / 2;
+      const delta = 1.5;
 
-      return {
-        south: lat - delta,
-        north: lat + delta,
-        west: lon - delta,
-        east: lon + delta,
-      };
+      south = centerLat - delta;
+      north = centerLat + delta;
+      west = centerLon - delta;
+      east = centerLon + delta;
     }
 
-    return bbox;
+    return { south, west, north, east };
   }
 
   if (hit.lat && hit.lon) {
     const lat = parseFloat(hit.lat);
     const lon = parseFloat(hit.lon);
-    const delta = 0.18;
+    const delta = 0.5;
 
     return {
       south: lat - delta,
@@ -145,48 +135,45 @@ async function geocodeLocation(location: string): Promise<BBox | null> {
 function keywordToOsmFilters(keyword: string): string[] {
   const kw = keyword.toLowerCase().trim();
 
-  const MAP: Record<string, string[]> = {
-    dentist: ['node["amenity"="dentist"]', 'way["amenity"="dentist"]'],
-    doctor: ['node["amenity"="doctors"]', 'way["amenity"="doctors"]'],
-    hospital: ['node["amenity"="hospital"]', 'way["amenity"="hospital"]'],
-    clinic: ['node["amenity"="clinic"]', 'way["amenity"="clinic"]'],
-    pharmacy: ['node["amenity"="pharmacy"]', 'way["amenity"="pharmacy"]'],
-    restaurant: ['node["amenity"="restaurant"]', 'way["amenity"="restaurant"]'],
-    cafe: ['node["amenity"="cafe"]', 'way["amenity"="cafe"]'],
-    hotel: ['node["tourism"="hotel"]', 'way["tourism"="hotel"]'],
-    gym: [
-      'node["leisure"="fitness_centre"]',
-      'way["leisure"="fitness_centre"]',
+  const map: Record<string, string[]> = {
+    dentist: [
+      'node["amenity"="dentist"]',
+      'way["amenity"="dentist"]',
+      'node["healthcare"="dentist"]',
+      'way["healthcare"="dentist"]',
     ],
-    bank: ['node["amenity"="bank"]', 'way["amenity"="bank"]'],
-    lawyer: ['node["office"="lawyer"]', 'way["office"="lawyer"]'],
-    school: ['node["amenity"="school"]', 'way["amenity"="school"]'],
-    supermarket: ['node["shop"="supermarket"]', 'way["shop"="supermarket"]'],
-    salon: ['node["shop"="hairdresser"]', 'way["shop"="hairdresser"]'],
-    plumber: ['node["craft"="plumber"]', 'way["craft"="plumber"]'],
-    electrician: [
-      'node["craft"="electrician"]',
-      'way["craft"="electrician"]',
+    restaurant: [
+      'node["amenity"="restaurant"]',
+      'way["amenity"="restaurant"]',
+      'node["amenity"="fast_food"]',
+      'way["amenity"="fast_food"]',
     ],
-    accountant: ['node["office"="accountant"]', 'way["office"="accountant"]'],
+    food: [
+      'node["amenity"="restaurant"]',
+      'way["amenity"="restaurant"]',
+      'node["amenity"="cafe"]',
+      'way["amenity"="cafe"]',
+      'node["shop"="supermarket"]',
+      'way["shop"="supermarket"]',
+    ],
+    hospital: [
+      'node["amenity"="hospital"]',
+      'way["amenity"="hospital"]',
+    ],
     shop: ['node["shop"]', 'way["shop"]'],
   };
 
-  for (const [key, filters] of Object.entries(MAP)) {
-    if (kw === key || kw.includes(key)) {
+  for (const [key, filters] of Object.entries(map)) {
+    if (kw.includes(key)) {
       return filters;
     }
   }
 
-  const safe = keyword.replace(/[^a-zA-Z0-9 ]/g, "");
-
-  return [`node["name"~"${safe}",i]`, `way["name"~"${safe}",i]`];
-}
-
-interface OsmElement {
-  type: string;
-  id: number;
-  tags?: Record<string, string>;
+  const safe = kw.replace(/[^a-z0-9 ]/gi, "");
+  return [
+    `node["name"~"${safe}",i]`,
+    `way["name"~"${safe}",i]`,
+  ];
 }
 
 async function queryOverpass(
@@ -195,12 +182,17 @@ async function queryOverpass(
   limit: number
 ): Promise<OsmElement[]> {
   const bboxStr = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
-  const unionLines = filters.map((f) => `  ${f}(${bboxStr});`).join("\n");
-  const query = `[out:json][timeout:25];\n(\n${unionLines}\n);\nout body ${
-    limit * 5
-  };`;
+  const unionLines = filters.map((f) => `${f}(${bboxStr});`).join("\n");
 
-  console.log("[OVERPASS] bbox:", bboxStr);
+  const query = `
+[out:json][timeout:25];
+(
+${unionLines}
+);
+out center;
+`;
+
+  console.log("[OVERPASS QUERY]", query);
 
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
@@ -209,14 +201,18 @@ async function queryOverpass(
       "User-Agent": "LeadGeneratorApp/1.0",
     },
     body: `data=${encodeURIComponent(query)}`,
+    cache: "no-store",
   });
 
+  const raw = await res.text();
+
   if (!res.ok) {
-    throw new Error(`Overpass API error: ${res.status} ${res.statusText}`);
+    console.error("[OVERPASS ERROR]", raw);
+    throw new Error(`Overpass failed: ${res.status}`);
   }
 
-  const json = (await res.json()) as { elements?: OsmElement[] };
-  return json.elements ?? [];
+  const json = JSON.parse(raw) as { elements?: OsmElement[] };
+  return (json.elements ?? []).slice(0, limit * 10);
 }
 
 function osmElementToLead(
@@ -225,40 +221,34 @@ function osmElementToLead(
   location: string
 ): RawLeadWithMeta | null {
   const tags = el.tags ?? {};
-
-  const businessName =
-    tags["name"] ?? tags["brand"] ?? tags["operator"] ?? undefined;
+  const businessName = tags.name || tags.brand || tags.operator;
 
   if (!businessName) {
     return null;
   }
 
-  const phone =
-    tags["phone"] ??
-    tags["contact:phone"] ??
-    tags["contact:mobile"] ??
-    tags["mobile"] ??
-    undefined;
-
-  const addrParts = [
+  const address = [
     tags["addr:housenumber"],
     tags["addr:street"],
-    tags["addr:suburb"],
     tags["addr:city"],
     tags["addr:state"],
-    tags["addr:postcode"],
-  ].filter(Boolean);
-
-  const address = addrParts.length ? addrParts.join(", ") : undefined;
-
-  const website =
-    tags["website"] ?? tags["contact:website"] ?? tags["url"] ?? undefined;
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return {
     businessName,
-    phone,
-    address,
-    website,
+    phone:
+      tags.phone ||
+      tags["contact:phone"] ||
+      tags["contact:mobile"] ||
+      undefined,
+    address: address || undefined,
+    website:
+      tags.website ||
+      tags["contact:website"] ||
+      tags.url ||
+      undefined,
     sourceUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
     keyword,
     location,
@@ -266,7 +256,7 @@ function osmElementToLead(
 }
 
 export class LeadScrapeOrchestrator {
-  private _scraperConfig: ScraperConfig | undefined;
+  private _scraperConfig?: ScraperConfig;
   private stats: ScraperStats;
 
   constructor(scraperConfig?: ScraperConfig) {
@@ -295,123 +285,46 @@ export class LeadScrapeOrchestrator {
   }
 
   async scrapeLeads(options: ScrapeOptions): Promise<ScrapedLead[]> {
-    this.stats = {
-      ...this.createEmptyStats(),
-      keyword: options.keyword,
-      location: options.location,
-      startTime: Date.now(),
-    };
+    const limit = options.limit ?? 20;
 
-    try {
-      console.log("[SCRAPE START]", options);
-
-      const bbox = await geocodeLocation(options.location);
-
-      if (!bbox) {
-        console.warn("[SCRAPER] Could not geocode:", options.location);
-        return [];
-      }
-
-      this.stats.pagesScraped++;
-
-      const filters = keywordToOsmFilters(options.keyword);
-      console.log("[SCRAPER] OSM filters:", filters);
-
-      const limit = options.limit ?? 20;
-      const elements = await queryOverpass(bbox, filters, limit);
-
-      this.stats.pagesSuccessful++;
-      console.log(`[SCRAPER] ${elements.length} OSM elements returned`);
-
-      const rawLeads: RawLeadWithMeta[] = elements
-        .map((el) => osmElementToLead(el, options.keyword, options.location))
-        .filter((lead): lead is RawLeadWithMeta => lead !== null);
-
-      this.stats.rawLeadsExtracted = rawLeads.length;
-
-      if (!rawLeads.length) {
-        console.warn("[SCRAPER] No named businesses in OSM for this query");
-        return [];
-      }
-
-      const normalizedLeads = normalizeLeads(rawLeads);
-
-      this.stats.leadsAfterNormalization = normalizedLeads.length;
-      this.stats.normalizationLoss = rawLeads.length - normalizedLeads.length;
-
-      const dedupedLeads = deduplicateLeads(
-        normalizedLeads as NormalizedLead[],
-        { nameSimilarityThreshold: 0.85 }
-      );
-
-      this.stats.leadsAfterDeduplication = dedupedLeads.length;
-      this.stats.duplicatesRemoved =
-        normalizedLeads.length - dedupedLeads.length;
-
-      const qualityScores = filterLeadsByQuality(dedupedLeads, {
-        minQualityScore: options.minQualityScore ?? 30,
-        requirePhone: options.requirePhone ?? false,
-        requireAddress: options.requireAddress ?? false,
-      });
-
-      const validLeads = qualityScores.filter((q) => q.isValid);
-
-      this.stats.validLeadsCount = validLeads.length;
-      this.stats.invalidLeadsCount =
-        qualityScores.length - validLeads.length;
-
-      this.stats.averageQualityScore =
-        validLeads.length > 0
-          ? validLeads.reduce((sum, q) => sum + q.score, 0) /
-            validLeads.length
-          : 0;
-
-      const finalLeads = validLeads
-        .slice(0, limit)
-        .map((q) => this.convertToScrapedLead(q.lead, options));
-
-      this.stats.totalLeadsDelivered = finalLeads.length;
-      this.stats.endTime = Date.now();
-      this.stats.duration = this.stats.endTime - this.stats.startTime;
-
-      this.stats.pipelineEfficiency =
-        rawLeads.length > 0
-          ? (finalLeads.length / rawLeads.length) * 100
-          : 0;
-
-      this.printSummary();
-
-      return finalLeads;
-    } catch (error) {
-      console.error("[PIPELINE ERROR]", error);
+    const bbox = await geocodeLocation(options.location);
+    if (!bbox) {
       return [];
     }
-  }
 
-  private convertToScrapedLead(
-    lead: NormalizedLead,
-    options: ScrapeOptions
-  ): ScrapedLead {
-    return {
-      businessName: lead.businessName,
-      phone: lead.phone,
-      address: lead.address,
-      website: lead.website,
-      sourceUrl: lead.sourceUrl || "",
-      keyword: options.keyword,
-      location: options.location,
-    };
-  }
+    const filters = keywordToOsmFilters(options.keyword);
+    const elements = await queryOverpass(bbox, filters, limit);
 
-  private printSummary(): void {
-    console.log("=".repeat(60));
-    console.log("SCRAPING PIPELINE SUMMARY  [OpenStreetMap]");
-    console.log("=".repeat(60));
-    console.log(`Duration:   ${this.stats.duration}ms`);
-    console.log(`Raw leads:  ${this.stats.rawLeadsExtracted}`);
-    console.log(`Delivered:  ${this.stats.totalLeadsDelivered}`);
-    console.log(`Efficiency: ${this.stats.pipelineEfficiency.toFixed(1)}%`);
-    console.log("=".repeat(60));
+    const rawLeads = elements
+      .map((el) => osmElementToLead(el, options.keyword, options.location))
+      .filter((lead): lead is RawLeadWithMeta => Boolean(lead));
+
+    const normalized = normalizeLeads(rawLeads);
+    const deduped = deduplicateLeads(normalized as NormalizedLead[], {
+      nameSimilarityThreshold: 0.85,
+    });
+
+    const quality = filterLeadsByQuality(deduped, {
+      minQualityScore: options.minQualityScore ?? 20,
+      requirePhone: options.requirePhone ?? false,
+      requireAddress: options.requireAddress ?? false,
+    });
+
+    const finalLeads = quality
+      .filter((q) => q.isValid)
+      .slice(0, limit)
+      .map((q) => ({
+        businessName: q.lead.businessName,
+        phone: q.lead.phone,
+        address: q.lead.address,
+        website: q.lead.website,
+        sourceUrl: q.lead.sourceUrl || "",
+        keyword: options.keyword,
+        location: options.location,
+      }));
+
+    this.stats.totalLeadsDelivered = finalLeads.length;
+    return finalLeads;
   }
 
   getStats(): ScraperStats {
