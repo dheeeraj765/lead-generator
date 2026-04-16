@@ -1,25 +1,31 @@
 /**
  * Scraping Orchestrator
  *
- * FIX: Replaced JustDial as the scraping target.
- * JustDial is a React SPA protected by Cloudflare — a plain Cheerio/Axios
- * request always receives a bot-challenge page with zero leads.
+ * Data source: OpenStreetMap Overpass API  (https://overpass-api.de)
+ * ─────────────────────────────────────────────────────────────────
+ * • 100 % free — no API key required
+ * • Returns JSON — no HTML parsing, no CSS selectors to maintain
+ * • Works from any serverless environment (Vercel, Lambda, etc.)
+ * • No bot-detection issues — it's a public data API
  *
- * New sources (tried in order, first successful result wins):
- *   1. Yellow Pages India  – server-rendered, Cheerio-friendly
- *   2. Sulekha             – server-rendered fallback
- *
- * The parser selectors have been updated to match each site's actual HTML.
+ * Strategy
+ * ────────
+ * 1. Geocode the user's location string → bounding box  (Nominatim)
+ * 2. Map the keyword to OSM amenity/shop/office tags
+ * 3. Query Overpass for all matching nodes/ways inside that bbox
+ * 4. Feed raw results through the existing normalise → dedupe → quality pipeline
  */
 
 import type { ScrapedLead } from "@/types";
-import AdaptiveScraper, { type ScraperConfig } from "./adaptive-scraper";
-import type { ScrapedPage } from "./puppeteer-scraper";
-import type { RawLead } from "./parser";
-import { normalizeLeads, type NormalizedLead } from "./normalizer";
+import type { ScraperConfig } from "./adaptive-scraper";
+import type { NormalizedLead } from "./normalizer";
+import { normalizeLeads } from "./normalizer";
 import { deduplicateLeads } from "./deduplicator";
 import { filterLeadsByQuality } from "./validator";
-import * as cheerio from "cheerio";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface ScrapeOptions {
   keyword: string;
@@ -50,241 +56,238 @@ export interface ScraperStats {
   pipelineEfficiency: number;
 }
 
-// ---------------------------------------------------------------------------
-// Source definitions
-// ---------------------------------------------------------------------------
-
-interface Source {
-  name: string;
-  buildUrl: (keyword: string, location: string) => string;
-  parse: (html: string, sourceUrl: string, keyword: string, location: string) => RawLeadWithMeta[];
-}
-
-type RawLeadWithMeta = RawLead & {
+interface RawLeadWithMeta {
+  businessName?: string;
+  phone?: string;
+  address?: string;
+  website?: string;
   sourceUrl: string;
   keyword: string;
   location: string;
-};
-
-/**
- * Parse Yellow Pages India (yellowpages.co.in)
- * Containers: .listing-info-div  |  .comp-info-main-div
- */
-function parseYellowPagesIndia(
-  html: string,
-  sourceUrl: string,
-  keyword: string,
-  location: string
-): RawLeadWithMeta[] {
-  const $ = cheerio.load(html);
-  const leads: RawLeadWithMeta[] = [];
-
-  const containers = $(
-    ".listing-info-div, .comp-info-main-div, .result-box, .business-listing"
-  );
-
-  containers.each((_i, el) => {
-    try {
-      const $el = $(el);
-
-      const businessName =
-        $el.find("h2, h3, .listing-name, .comp-name, .business-name").first().text().trim() ||
-        $el.find("a").first().text().trim();
-
-      const phone = $el
-        .find(".contact-info, .phone, [class*='phone'], [class*='mobile']")
-        .first()
-        .text()
-        .replace(/[^0-9+\-\s()]/g, "")
-        .trim();
-
-      const address = $el
-        .find(".address, [class*='address'], [class*='location'], .area")
-        .first()
-        .text()
-        .trim();
-
-      const websiteEl = $el.find("a[href^='http']:not([href*='yellowpages'])");
-      const website = websiteEl.attr("href") || "";
-
-      if (businessName && businessName.length > 2) {
-        leads.push({
-          businessName,
-          phone: phone || undefined,
-          address: address || undefined,
-          website: website || undefined,
-          sourceUrl,
-          keyword,
-          location,
-        });
-      }
-    } catch {
-      // skip malformed element
-    }
-  });
-
-  return leads;
 }
 
-/**
- * Parse Sulekha (sulekha.com)
- * Containers: .cp-listing-card  |  .search-result-item
- */
-function parseSulekha(
-  html: string,
-  sourceUrl: string,
-  keyword: string,
-  location: string
-): RawLeadWithMeta[] {
-  const $ = cheerio.load(html);
-  const leads: RawLeadWithMeta[] = [];
+// ─────────────────────────────────────────────────────────────────────────────
+// Nominatim geocoder
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const containers = $(
-    ".cp-listing-card, .search-result-item, .biz-listing, .result-card"
-  );
-
-  containers.each((_i, el) => {
-    try {
-      const $el = $(el);
-
-      const businessName = $el
-        .find("h2, h3, .biz-name, .company-name, [class*='name']")
-        .first()
-        .text()
-        .trim();
-
-      const phone = $el
-        .find("[class*='phone'], [class*='mobile'], [class*='contact']")
-        .first()
-        .text()
-        .replace(/[^0-9+\-\s()]/g, "")
-        .trim();
-
-      const address = $el
-        .find("[class*='address'], [class*='location'], [class*='area']")
-        .first()
-        .text()
-        .trim();
-
-      const website =
-        $el.find("a[href^='http']:not([href*='sulekha'])").attr("href") || "";
-
-      if (businessName && businessName.length > 2) {
-        leads.push({
-          businessName,
-          phone: phone || undefined,
-          address: address || undefined,
-          website: website || undefined,
-          sourceUrl,
-          keyword,
-          location,
-        });
-      }
-    } catch {
-      // skip malformed element
-    }
-  });
-
-  return leads;
+interface BBox {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
 }
 
-/**
- * Generic fallback: look for any pattern that resembles a business card.
- * Tries common class names used across many Indian business directories.
- */
-function parseGenericDirectory(
-  html: string,
-  sourceUrl: string,
-  keyword: string,
-  location: string
-): RawLeadWithMeta[] {
-  const $ = cheerio.load(html);
-  const leads: RawLeadWithMeta[] = [];
+async function geocodeLocation(location: string): Promise<BBox | null> {
+  const url =
+    `https://nominatim.openstreetmap.org/search` +
+    `?q=${encodeURIComponent(location)}&format=json&limit=1`;
 
-  // Broad container sweep
-  $("[class*='listing'], [class*='result'], [class*='business'], [class*='company']").each(
-    (_i, el) => {
-      try {
-        const $el = $(el);
-
-        // Must have a reasonably long text block to be a real card
-        if ($el.text().trim().length < 20) return;
-
-        const businessName =
-          $el.find("h2, h3, h4").first().text().trim() ||
-          $el.find("a").first().text().trim();
-
-        const phoneMatch = $el.text().match(/(\+?[0-9][0-9\-\s()]{8,}[0-9])/);
-        const phone = phoneMatch ? phoneMatch[1].trim() : undefined;
-
-        const address = $el
-          .find("[class*='address'], [class*='location']")
-          .first()
-          .text()
-          .trim();
-
-        if (businessName && businessName.length > 2) {
-          leads.push({
-            businessName,
-            phone,
-            address: address || undefined,
-            website: undefined,
-            sourceUrl,
-            keyword,
-            location,
-          });
-        }
-      } catch {
-        // skip
-      }
-    }
-  );
-
-  // De-dupe by name within this page
-  const seen = new Set<string>();
-  return leads.filter((l) => {
-    const key = l.businessName?.toLowerCase() ?? "";
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "LeadGeneratorApp/1.0 (contact@example.com)",
+      Accept: "application/json",
+    },
   });
+
+  if (!res.ok) {
+    console.error("[GEOCODE] Nominatim error", res.status);
+    return null;
+  }
+
+  const data = (await res.json()) as Array<{
+    boundingbox?: string[];
+    lat?: string;
+    lon?: string;
+  }>;
+
+  if (!data.length) {
+    console.warn("[GEOCODE] No results for:", location);
+    return null;
+  }
+
+  const hit = data[0];
+
+  // boundingbox order from Nominatim: [south, north, west, east]
+  if (hit.boundingbox && hit.boundingbox.length === 4) {
+    const bbox: BBox = {
+      south: parseFloat(hit.boundingbox[0]),
+      north: parseFloat(hit.boundingbox[1]),
+      west:  parseFloat(hit.boundingbox[2]),
+      east:  parseFloat(hit.boundingbox[3]),
+    };
+
+    // If the bbox is too large (e.g. whole country), shrink to ~50 km radius
+    const latSpan = bbox.north - bbox.south;
+    const lonSpan = bbox.east - bbox.west;
+    if (latSpan > 1.0 || lonSpan > 1.0) {
+      const lat = (bbox.south + bbox.north) / 2;
+      const lon = (bbox.west + bbox.east) / 2;
+      const delta = 0.45; // ~50 km
+      return {
+        south: lat - delta,
+        north: lat + delta,
+        west:  lon - delta,
+        east:  lon + delta,
+      };
+    }
+
+    return bbox;
+  }
+
+  // Fallback: build a ~20 km box around the centre point
+  if (hit.lat && hit.lon) {
+    const lat = parseFloat(hit.lat);
+    const lon = parseFloat(hit.lon);
+    const delta = 0.18;
+    return {
+      south: lat - delta,
+      north: lat + delta,
+      west:  lon - delta,
+      east:  lon + delta,
+    };
+  }
+
+  return null;
 }
 
-// ---------------------------------------------------------------------------
-// Sources registry
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyword → OSM tag mapping
+// ─────────────────────────────────────────────────────────────────────────────
 
-const SOURCES: Source[] = [
-  {
-    name: "YellowPagesIndia",
-    buildUrl: (keyword, location) =>
-      `https://www.yellowpages.co.in/search?kwd=${encodeURIComponent(
-        keyword
-      )}&city=${encodeURIComponent(location)}`,
-    parse: (html, url, keyword, location) =>
-      parseYellowPagesIndia(html, url, keyword, location),
-  },
-  {
-    name: "Sulekha",
-    buildUrl: (keyword, location) =>
-      `https://www.sulekha.com/${encodeURIComponent(
-        location
-      )}/${encodeURIComponent(keyword)}/default-default`,
-    parse: (html, url, keyword, location) =>
-      parseSulekha(html, url, keyword, location),
-  },
-];
+function keywordToOsmFilters(keyword: string): string[] {
+  const kw = keyword.toLowerCase().trim();
 
-// ---------------------------------------------------------------------------
+  const MAP: Record<string, string[]> = {
+    dentist:     ['node["amenity"="dentist"]',        'way["amenity"="dentist"]'],
+    doctor:      ['node["amenity"="doctors"]',         'way["amenity"="doctors"]'],
+    hospital:    ['node["amenity"="hospital"]',        'way["amenity"="hospital"]'],
+    clinic:      ['node["amenity"="clinic"]',          'way["amenity"="clinic"]'],
+    pharmacy:    ['node["amenity"="pharmacy"]',        'way["amenity"="pharmacy"]'],
+    restaurant:  ['node["amenity"="restaurant"]',      'way["amenity"="restaurant"]'],
+    cafe:        ['node["amenity"="cafe"]',            'way["amenity"="cafe"]'],
+    hotel:       ['node["tourism"="hotel"]',           'way["tourism"="hotel"]'],
+    gym:         ['node["leisure"="fitness_centre"]',  'way["leisure"="fitness_centre"]'],
+    bank:        ['node["amenity"="bank"]',            'way["amenity"="bank"]'],
+    lawyer:      ['node["office"="lawyer"]',           'way["office"="lawyer"]'],
+    school:      ['node["amenity"="school"]',          'way["amenity"="school"]'],
+    supermarket: ['node["shop"="supermarket"]',        'way["shop"="supermarket"]'],
+    salon:       ['node["shop"="hairdresser"]',        'way["shop"="hairdresser"]'],
+    plumber:     ['node["craft"="plumber"]',           'way["craft"="plumber"]'],
+    electrician: ['node["craft"="electrician"]',       'way["craft"="electrician"]'],
+    accountant:  ['node["office"="accountant"]',       'way["office"="accountant"]'],
+    shop:        ['node["shop"]',                      'way["shop"]'],
+  };
+
+  for (const [key, filters] of Object.entries(MAP)) {
+    if (kw === key || kw.includes(key)) return filters;
+  }
+
+  // Generic: search by name tag (case-insensitive regex)
+  const safe = keyword.replace(/[^a-zA-Z0-9 ]/g, "");
+  return [
+    `node["name"~"${safe}",i]`,
+    `way["name"~"${safe}",i]`,
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Overpass query
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface OsmElement {
+  type: string;
+  id: number;
+  tags?: Record<string, string>;
+}
+
+async function queryOverpass(
+  bbox: BBox,
+  filters: string[],
+  limit: number
+): Promise<OsmElement[]> {
+  const bboxStr = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
+  const unionLines = filters.map((f) => `  ${f}(${bboxStr});`).join("\n");
+  const query = `[out:json][timeout:25];\n(\n${unionLines}\n);\nout body ${limit * 5};`;
+
+  console.log("[OVERPASS] bbox:", bboxStr);
+
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "LeadGeneratorApp/1.0",
+    },
+    body: `data=${encodeURIComponent(query)}`,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Overpass API error: ${res.status} ${res.statusText}`);
+  }
+
+  const json = (await res.json()) as { elements?: OsmElement[] };
+  return json.elements ?? [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OSM element → RawLeadWithMeta
+// ─────────────────────────────────────────────────────────────────────────────
+
+function osmElementToLead(
+  el: OsmElement,
+  keyword: string,
+  location: string
+): RawLeadWithMeta | null {
+  const tags = el.tags ?? {};
+
+  const businessName =
+    tags["name"] ?? tags["brand"] ?? tags["operator"] ?? undefined;
+  if (!businessName) return null;
+
+  const phone =
+    tags["phone"] ??
+    tags["contact:phone"] ??
+    tags["contact:mobile"] ??
+    tags["mobile"] ??
+    undefined;
+
+  const addrParts = [
+    tags["addr:housenumber"],
+    tags["addr:street"],
+    tags["addr:suburb"],
+    tags["addr:city"],
+    tags["addr:state"],
+    tags["addr:postcode"],
+  ].filter(Boolean);
+  const address = addrParts.length ? addrParts.join(", ") : undefined;
+
+  const website =
+    tags["website"] ??
+    tags["contact:website"] ??
+    tags["url"] ??
+    undefined;
+
+  return {
+    businessName,
+    phone,
+    address,
+    website,
+    sourceUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
+    keyword,
+    location,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Orchestrator
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class LeadScrapeOrchestrator {
-  private scraper: AdaptiveScraper;
+  // scraperConfig kept for API compatibility — unused (no browser / HTTP scraping)
+  private _scraperConfig: ScraperConfig | undefined;
   private stats: ScraperStats;
 
   constructor(scraperConfig?: ScraperConfig) {
-    this.scraper = new AdaptiveScraper(scraperConfig);
+    this._scraperConfig = scraperConfig;
     this.stats = this.createEmptyStats();
   }
 
@@ -319,35 +322,58 @@ export class LeadScrapeOrchestrator {
     try {
       console.log("[SCRAPE START]", options);
 
-      await this.scraper.initialize();
+      // 1. Geocode
+      const bbox = await geocodeLocation(options.location);
+      if (!bbox) {
+        console.warn("[SCRAPER] Could not geocode:", options.location);
+        return [];
+      }
+      this.stats.pagesScraped++;
 
-      const rawLeads = await this.scrapeAllSources(options);
+      // 2. Keyword → OSM filters
+      const filters = keywordToOsmFilters(options.keyword);
+      console.log("[SCRAPER] OSM filters:", filters);
+
+      // 3. Overpass query
+      const limit = options.limit ?? 20;
+      const elements = await queryOverpass(bbox, filters, limit);
+      this.stats.pagesSuccessful++;
+      console.log(`[SCRAPER] ${elements.length} OSM elements returned`);
+
+      // 4. Convert
+      const rawLeads: RawLeadWithMeta[] = elements
+        .map((el) => osmElementToLead(el, options.keyword, options.location))
+        .filter((l): l is RawLeadWithMeta => l !== null);
+
       this.stats.rawLeadsExtracted = rawLeads.length;
 
       if (!rawLeads.length) {
-        console.warn("[SCRAPER] No raw leads found across all sources");
+        console.warn("[SCRAPER] No named businesses in OSM for this query");
         return [];
       }
 
+      // 5. Normalise
       const normalizedLeads = normalizeLeads(rawLeads);
       this.stats.leadsAfterNormalization = normalizedLeads.length;
       this.stats.normalizationLoss = rawLeads.length - normalizedLeads.length;
 
-      const dedupedLeads = deduplicateLeads(normalizedLeads as NormalizedLead[], {
-        nameSimilarityThreshold: 0.85,
-      });
-
+      // 6. Deduplicate
+      const dedupedLeads = deduplicateLeads(
+        normalizedLeads as NormalizedLead[],
+        { nameSimilarityThreshold: 0.85 }
+      );
       this.stats.leadsAfterDeduplication = dedupedLeads.length;
       this.stats.duplicatesRemoved = normalizedLeads.length - dedupedLeads.length;
 
+      // 7. Quality filter — lower threshold (30) because OSM entries often
+      //    lack phone/website but are still valid business leads
       const qualityScores = filterLeadsByQuality(dedupedLeads, {
-        minQualityScore: options.minQualityScore ?? 50,
+        minQualityScore: options.minQualityScore ?? 30,
         requirePhone: options.requirePhone ?? false,
         requireAddress: options.requireAddress ?? false,
       });
 
       const validLeads = qualityScores.filter((q) => q.isValid);
-
       this.stats.validLeadsCount = validLeads.length;
       this.stats.invalidLeadsCount = qualityScores.length - validLeads.length;
       this.stats.averageQualityScore =
@@ -355,67 +381,25 @@ export class LeadScrapeOrchestrator {
           ? validLeads.reduce((sum, q) => sum + q.score, 0) / validLeads.length
           : 0;
 
+      // 8. Slice to limit
       const finalLeads = validLeads
-        .slice(0, options.limit || validLeads.length)
+        .slice(0, limit)
         .map((q) => this.convertToScrapedLead(q.lead, options));
 
       this.stats.totalLeadsDelivered = finalLeads.length;
       this.stats.endTime = Date.now();
       this.stats.duration = this.stats.endTime - this.stats.startTime;
       this.stats.pipelineEfficiency =
-        rawLeads.length > 0 ? (finalLeads.length / rawLeads.length) * 100 : 0;
+        rawLeads.length > 0
+          ? (finalLeads.length / rawLeads.length) * 100
+          : 0;
 
       this.printSummary();
       return finalLeads;
     } catch (error) {
       console.error("[PIPELINE ERROR]", error);
       return [];
-    } finally {
-      await this.scraper.close();
     }
-  }
-
-  /**
-   * Try each source in order; collect leads from whichever ones succeed.
-   * If a source returns 0 leads, we try the next one.
-   */
-  private async scrapeAllSources(options: ScrapeOptions): Promise<RawLeadWithMeta[]> {
-    const allLeads: RawLeadWithMeta[] = [];
-
-    for (const source of SOURCES) {
-      try {
-        const url = source.buildUrl(options.keyword, options.location);
-        console.log(`[SCRAPER] Trying ${source.name}: ${url}`);
-
-        const page: ScrapedPage = await this.scraper.scrapePage(url);
-        this.stats.pagesScraped++;
-
-        // Use generic parser first (works across many sites), then the
-        // site-specific one as a supplement.
-        let leads = source.parse(page.html, page.url, options.keyword, options.location);
-
-        if (!leads.length) {
-          // Generic fallback
-          leads = parseGenericDirectory(page.html, page.url, options.keyword, options.location);
-        }
-
-        console.log(`[SCRAPER] ${source.name} returned ${leads.length} raw leads`);
-
-        if (leads.length > 0) {
-          this.stats.pagesSuccessful++;
-          allLeads.push(...leads);
-
-          // Stop trying more sources once we have enough raw leads
-          const limit = options.limit ?? 20;
-          if (allLeads.length >= limit * 3) break;
-        }
-      } catch (err) {
-        console.error(`[SCRAPER] ${source.name} failed:`, err);
-        // Continue to next source
-      }
-    }
-
-    return allLeads;
   }
 
   private convertToScrapedLead(
@@ -434,11 +418,9 @@ export class LeadScrapeOrchestrator {
   }
 
   private printSummary(): void {
-    const info = this.scraper.getInfo();
     console.log("=".repeat(60));
-    console.log("SCRAPING PIPELINE SUMMARY");
+    console.log("SCRAPING PIPELINE SUMMARY  [OpenStreetMap]");
     console.log("=".repeat(60));
-    console.log(`Method:     ${info.method}`);
     console.log(`Duration:   ${this.stats.duration}ms`);
     console.log(`Raw leads:  ${this.stats.rawLeadsExtracted}`);
     console.log(`Delivered:  ${this.stats.totalLeadsDelivered}`);
