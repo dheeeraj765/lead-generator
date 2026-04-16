@@ -1,8 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getUserFromSession } from '@/lib/auth';
-import LeadScrapeOrchestrator from '@/lib/scrapers/orchestrator';
-import { prisma } from '@/lib/db';
-import { z } from 'zod';
+import { NextRequest, NextResponse } from "next/server";
+import { getUserFromSession } from "@/lib/auth";
+import LeadScrapeOrchestrator from "@/lib/scrapers/orchestrator";
+import { prisma } from "@/lib/db";
+import { z } from "zod";
 
 const ScrapeRequestSchema = z.object({
   keyword: z.string().min(2).max(100),
@@ -24,14 +24,13 @@ export async function POST(request: NextRequest) {
           inserted: 0,
           duplicatesSkipped: 0,
           leads: [],
-          error: 'Authentication required',
+          error: "Authentication required",
         },
         { status: 401 }
       );
     }
 
     let body: unknown;
-
     try {
       body = await request.json();
     } catch {
@@ -41,22 +40,37 @@ export async function POST(request: NextRequest) {
           inserted: 0,
           duplicatesSkipped: 0,
           leads: [],
-          error: 'Invalid request JSON',
+          error: "Invalid request JSON",
         },
         { status: 400 }
       );
     }
 
-    const scrapeRequest = ScrapeRequestSchema.parse(body);
+    let scrapeRequest: z.infer<typeof ScrapeRequestSchema>;
+    try {
+      scrapeRequest = ScrapeRequestSchema.parse(body);
+    } catch (err) {
+      return NextResponse.json(
+        {
+          success: false,
+          inserted: 0,
+          duplicatesSkipped: 0,
+          leads: [],
+          error: err instanceof Error ? err.message : "Invalid request parameters",
+        },
+        { status: 422 }
+      );
+    }
 
     const isVercel = !!process.env.VERCEL;
 
     const orchestrator = new LeadScrapeOrchestrator({
-      headless: !isVercel,
-      timeout: 60000,
-      delayBetweenRequests: 2000,
+      headless: true,
+      timeout: 20000,
+      delayBetweenRequests: 1000,
       maxRetries: 2,
-      fallbackToCheerio: isVercel,
+      // Always use Cheerio on Vercel; use Puppeteer locally only if not production
+      fallbackToCheerio: isVercel || process.env.NODE_ENV === "production",
     });
 
     const leads = await orchestrator.scrapeLeads({
@@ -79,7 +93,7 @@ export async function POST(request: NextRequest) {
           inserted: 0,
           duplicatesSkipped: 0,
           leads: [],
-          error: 'User not found',
+          error: "User not found",
         },
         { status: 404 }
       );
@@ -91,18 +105,24 @@ export async function POST(request: NextRequest) {
 
     for (const lead of leads) {
       try {
+        // Build the OR conditions carefully — a null website should NOT match
+        // other leads with a null website, otherwise every no-website lead is
+        // treated as a duplicate of every other one.
+        const orConditions: object[] = [
+          {
+            businessName: lead.businessName,
+            phone: lead.phone ?? null,
+          },
+        ];
+
+        if (lead.website) {
+          orConditions.push({ website: lead.website });
+        }
+
         const existing = await prisma.lead.findFirst({
           where: {
             userId: dbUser.id,
-            OR: [
-              {
-                businessName: lead.businessName,
-                phone: lead.phone || null,
-              },
-              {
-                website: lead.website || null,
-              },
-            ],
+            OR: orConditions,
           },
         });
 
@@ -115,9 +135,9 @@ export async function POST(request: NextRequest) {
           data: {
             userId: dbUser.id,
             businessName: lead.businessName,
-            phone: lead.phone || null,
-            address: lead.address || null,
-            website: lead.website || null,
+            phone: lead.phone ?? null,
+            address: lead.address ?? null,
+            website: lead.website ?? null,
             sourceUrl: lead.sourceUrl,
             keyword: lead.keyword,
             location: lead.location,
@@ -127,7 +147,7 @@ export async function POST(request: NextRequest) {
         savedLeads.push(saved);
         inserted++;
       } catch (insertError) {
-        console.error('[LEAD INSERT ERROR]', insertError);
+        console.error("[LEAD INSERT ERROR]", insertError);
       }
     }
 
@@ -139,23 +159,22 @@ export async function POST(request: NextRequest) {
       stats: orchestrator.getStats(),
     });
   } catch (error) {
-    console.error('[SCRAPE ERROR]', error);
-
+    console.error("[SCRAPE ERROR]", error);
     return NextResponse.json(
       {
         success: false,
         inserted: 0,
         duplicatesSkipped: 0,
         leads: [],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unknown scrape error',
+        error: error instanceof Error ? error.message : "Unknown scrape error",
       },
       { status: 500 }
     );
   }
 }
 
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+
+// FIX: was 300 — Vercel Hobby plan hard-caps serverless functions at 60 s.
+// Setting it to 300 on a free plan causes silent deployment issues.
+export const maxDuration = 60;
