@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import Navbar from '@/components/NavBar';
-import ScrapeForm from '@/components/ScrapeForm';
-import FiltersBar from '@/components/FiltersBar';
-import LeadsTable from '@/components/LeadsTable';
+import Navbar from '@/app/components/NavBar';
+import ScrapeForm from '@/app/components/ScrapeForm';
+import FiltersBar from '@/app/components/FiltersBar';
+import LeadsTable from '@/app/components/LeadsTable';
 import { LeadWithoutUser } from '@/types';
 
 export default function DashboardPage() {

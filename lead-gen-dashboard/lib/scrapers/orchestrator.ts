@@ -137,6 +137,14 @@ function osmElementToLead(
 export class LeadScrapeOrchestrator {
   private _scraperConfig?: ScraperConfig;
 
+  // ✅ stats tracking
+  private stats = {
+    totalFetched: 0,
+    normalized: 0,
+    deduplicated: 0,
+    final: 0,
+  };
+
   constructor(scraperConfig?: ScraperConfig) {
     this._scraperConfig = scraperConfig;
   }
@@ -148,21 +156,25 @@ export class LeadScrapeOrchestrator {
     const filters = keywordToOsmFilters(options.keyword);
     const elements = await queryOverpass(bbox, filters, options.limit ?? 20);
 
+    this.stats.totalFetched = elements.length;
+
     const rawLeads = elements
       .map((el) => osmElementToLead(el, options.keyword, options.location))
-      .filter((lead): lead is RawLeadWithMeta => lead !== null); // ✅ FIX 1
+      .filter((lead): lead is RawLeadWithMeta => lead !== null);
 
     const normalized = normalizeLeads(rawLeads);
+    this.stats.normalized = normalized.length;
 
     const deduped = deduplicateLeads(normalized as NormalizedLead[], {
       nameSimilarityThreshold: 0.85,
     });
+    this.stats.deduplicated = deduped.length;
 
     const quality = filterLeadsByQuality(deduped, {
       minQualityScore: options.minQualityScore ?? 20,
     });
 
-    return quality
+    const finalLeads = quality
       .filter((q) => q.isValid)
       .slice(0, options.limit ?? 20)
       .map((q) => ({
@@ -170,10 +182,19 @@ export class LeadScrapeOrchestrator {
         phone: q.lead.phone,
         address: q.lead.address,
         website: q.lead.website,
-        sourceUrl: q.lead.sourceUrl || "", // ✅ FIX 2
+        sourceUrl: q.lead.sourceUrl || "",
         keyword: options.keyword,
         location: options.location,
       }));
+
+    this.stats.final = finalLeads.length;
+
+    return finalLeads;
+  }
+
+  // ✅ FIX: add missing method
+  getStats() {
+    return this.stats;
   }
 }
 
