@@ -1,7 +1,4 @@
-/**
- * lib/scrapers/orchestrator.ts
- * OpenStreetMap lead scraping orchestrator
- */
+// lib/scrapers/orchestrator.ts
 
 import type { ScrapedLead } from "@/types";
 import type { ScraperConfig } from "./adaptive-scraper";
@@ -19,28 +16,8 @@ export interface ScrapeOptions {
   requireAddress?: boolean;
 }
 
-export interface ScraperStats {
-  keyword: string;
-  location: string;
-  startTime: number;
-  endTime?: number;
-  duration?: number;
-  pagesScraped: number;
-  pagesSuccessful: number;
-  rawLeadsExtracted: number;
-  leadsAfterNormalization: number;
-  normalizationLoss: number;
-  leadsAfterDeduplication: number;
-  duplicatesRemoved: number;
-  validLeadsCount: number;
-  invalidLeadsCount: number;
-  averageQualityScore: number;
-  totalLeadsDelivered: number;
-  pipelineEfficiency: number;
-}
-
 interface RawLeadWithMeta {
-  businessName?: string;
+  businessName: string;
   phone?: string;
   address?: string;
   website?: string;
@@ -63,117 +40,48 @@ interface OsmElement {
 }
 
 async function geocodeLocation(location: string): Promise<BBox | null> {
-  const url =
+  const res = await fetch(
     `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
       location
-    )}&format=json&limit=1`;
+    )}&format=json&limit=1`,
+    { headers: { "User-Agent": "LeadGeneratorApp/1.0" } }
+  );
 
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "LeadGeneratorApp/1.0",
-    },
-    cache: "no-store",
-  });
+  if (!res.ok) return null;
 
-  if (!res.ok) {
-    console.error("[GEOCODE ERROR]", res.status);
-    return null;
-  }
+  const data = await res.json();
+  if (!data.length) return null;
 
-  const data = (await res.json()) as Array<{
-    boundingbox?: string[];
-    lat?: string;
-    lon?: string;
-  }>;
+  const b = data[0].boundingbox;
 
-  if (!data.length) {
-    return null;
-  }
-
-  const hit = data[0];
-
-  if (hit.boundingbox?.length === 4) {
-    let south = parseFloat(hit.boundingbox[0]);
-    let north = parseFloat(hit.boundingbox[1]);
-    let west = parseFloat(hit.boundingbox[2]);
-    let east = parseFloat(hit.boundingbox[3]);
-
-    const latSpan = north - south;
-    const lonSpan = east - west;
-
-    if (latSpan > 1 || lonSpan > 1) {
-      const centerLat = (south + north) / 2;
-      const centerLon = (west + east) / 2;
-      const delta = 1.5;
-
-      south = centerLat - delta;
-      north = centerLat + delta;
-      west = centerLon - delta;
-      east = centerLon + delta;
-    }
-
-    return { south, west, north, east };
-  }
-
-  if (hit.lat && hit.lon) {
-    const lat = parseFloat(hit.lat);
-    const lon = parseFloat(hit.lon);
-    const delta = 0.5;
-
-    return {
-      south: lat - delta,
-      north: lat + delta,
-      west: lon - delta,
-      east: lon + delta,
-    };
-  }
-
-  return null;
+  return {
+    south: parseFloat(b[0]),
+    north: parseFloat(b[1]),
+    west: parseFloat(b[2]),
+    east: parseFloat(b[3]),
+  };
 }
 
 function keywordToOsmFilters(keyword: string): string[] {
-  const kw = keyword.toLowerCase().trim();
+  const kw = keyword.toLowerCase();
 
-  const map: Record<string, string[]> = {
-    dentist: [
-      'node["amenity"="dentist"]',
-      'way["amenity"="dentist"]',
-      'node["healthcare"="dentist"]',
-      'way["healthcare"="dentist"]',
-    ],
-    restaurant: [
-      'node["amenity"="restaurant"]',
-      'way["amenity"="restaurant"]',
-      'node["amenity"="fast_food"]',
-      'way["amenity"="fast_food"]',
-    ],
-    food: [
+  if (kw.includes("restaurant") || kw.includes("food")) {
+    return [
       'node["amenity"="restaurant"]',
       'way["amenity"="restaurant"]',
       'node["amenity"="cafe"]',
       'way["amenity"="cafe"]',
-      'node["shop"="supermarket"]',
-      'way["shop"="supermarket"]',
-    ],
-    hospital: [
-      'node["amenity"="hospital"]',
-      'way["amenity"="hospital"]',
-    ],
-    shop: ['node["shop"]', 'way["shop"]'],
-  };
-
-  for (const [key, filters] of Object.entries(map)) {
-    if (kw.includes(key)) {
-      return filters;
-    }
+    ];
   }
 
-  const safe = kw.replace(/[^a-z0-9 ]/gi, "");
-  return [
-    `node["name"~"${safe}",i]`,
-    `way["name"~"${safe}",i]`,
-  ];
+  if (kw.includes("dentist")) {
+    return [
+      'node["amenity"="dentist"]',
+      'way["amenity"="dentist"]',
+    ];
+  }
+
+  return [`node["name"~"${kw}",i]`, `way["name"~"${kw}",i]`];
 }
 
 async function queryOverpass(
@@ -182,36 +90,24 @@ async function queryOverpass(
   limit: number
 ): Promise<OsmElement[]> {
   const bboxStr = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
-  const unionLines = filters.map((f) => `${f}(${bboxStr});`).join("\n");
 
   const query = `
 [out:json][timeout:25];
 (
-${unionLines}
+${filters.map((f) => `${f}(${bboxStr});`).join("\n")}
 );
 out center;
 `;
 
-  console.log("[OVERPASS QUERY]", query);
-
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "LeadGeneratorApp/1.0",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `data=${encodeURIComponent(query)}`,
-    cache: "no-store",
   });
 
-  const raw = await res.text();
+  if (!res.ok) throw new Error("Overpass failed");
 
-  if (!res.ok) {
-    console.error("[OVERPASS ERROR]", raw);
-    throw new Error(`Overpass failed: ${res.status}`);
-  }
-
-  const json = JSON.parse(raw) as { elements?: OsmElement[] };
+  const json = await res.json();
   return (json.elements ?? []).slice(0, limit * 10);
 }
 
@@ -221,34 +117,17 @@ function osmElementToLead(
   location: string
 ): RawLeadWithMeta | null {
   const tags = el.tags ?? {};
-  const businessName = tags.name || tags.brand || tags.operator;
+  const name = tags.name || tags.brand;
 
-  if (!businessName) {
-    return null;
-  }
-
-  const address = [
-    tags["addr:housenumber"],
-    tags["addr:street"],
-    tags["addr:city"],
-    tags["addr:state"],
-  ]
-    .filter(Boolean)
-    .join(", ");
+  if (!name) return null;
 
   return {
-    businessName,
-    phone:
-      tags.phone ||
-      tags["contact:phone"] ||
-      tags["contact:mobile"] ||
-      undefined,
-    address: address || undefined,
-    website:
-      tags.website ||
-      tags["contact:website"] ||
-      tags.url ||
-      undefined,
+    businessName: name,
+    phone: tags.phone || tags["contact:phone"],
+    address: [tags["addr:street"], tags["addr:city"]]
+      .filter(Boolean)
+      .join(", "),
+    website: tags.website,
     sourceUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
     keyword,
     location,
@@ -257,78 +136,44 @@ function osmElementToLead(
 
 export class LeadScrapeOrchestrator {
   private _scraperConfig?: ScraperConfig;
-  private stats: ScraperStats;
 
   constructor(scraperConfig?: ScraperConfig) {
     this._scraperConfig = scraperConfig;
-    this.stats = this.createEmptyStats();
-  }
-
-  private createEmptyStats(): ScraperStats {
-    return {
-      keyword: "",
-      location: "",
-      startTime: 0,
-      pagesScraped: 0,
-      pagesSuccessful: 0,
-      rawLeadsExtracted: 0,
-      leadsAfterNormalization: 0,
-      normalizationLoss: 0,
-      leadsAfterDeduplication: 0,
-      duplicatesRemoved: 0,
-      validLeadsCount: 0,
-      invalidLeadsCount: 0,
-      averageQualityScore: 0,
-      totalLeadsDelivered: 0,
-      pipelineEfficiency: 0,
-    };
   }
 
   async scrapeLeads(options: ScrapeOptions): Promise<ScrapedLead[]> {
-    const limit = options.limit ?? 20;
-
     const bbox = await geocodeLocation(options.location);
-    if (!bbox) {
-      return [];
-    }
+    if (!bbox) return [];
 
     const filters = keywordToOsmFilters(options.keyword);
-    const elements = await queryOverpass(bbox, filters, limit);
+    const elements = await queryOverpass(bbox, filters, options.limit ?? 20);
 
     const rawLeads = elements
       .map((el) => osmElementToLead(el, options.keyword, options.location))
-      .filter((lead): lead is RawLeadWithMeta => Boolean(lead));
+      .filter((lead): lead is RawLeadWithMeta => lead !== null); // ✅ FIX 1
 
     const normalized = normalizeLeads(rawLeads);
+
     const deduped = deduplicateLeads(normalized as NormalizedLead[], {
       nameSimilarityThreshold: 0.85,
     });
 
     const quality = filterLeadsByQuality(deduped, {
       minQualityScore: options.minQualityScore ?? 20,
-      requirePhone: options.requirePhone ?? false,
-      requireAddress: options.requireAddress ?? false,
     });
 
-    const finalLeads = quality
+    return quality
       .filter((q) => q.isValid)
-      .slice(0, limit)
+      .slice(0, options.limit ?? 20)
       .map((q) => ({
         businessName: q.lead.businessName,
         phone: q.lead.phone,
         address: q.lead.address,
         website: q.lead.website,
-        sourceUrl: q.lead.sourceUrl || "",
+        sourceUrl: q.lead.sourceUrl || "", // ✅ FIX 2
         keyword: options.keyword,
         location: options.location,
       }));
-
-    this.stats.totalLeadsDelivered = finalLeads.length;
-    return finalLeads;
-  }
-
-  getStats(): ScraperStats {
-    return this.stats;
   }
 }
 

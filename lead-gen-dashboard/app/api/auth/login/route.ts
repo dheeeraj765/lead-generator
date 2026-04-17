@@ -1,38 +1,52 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { verifyPassword, createSession } from '@/lib/auth';
-import { loginSchema } from '@/lib/validators';
+// app/api/auth/login/route.ts
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/db";
+import {
+  verifyPassword,
+  createSession,
+  normalizeEmail,
+} from "@/lib/auth";
+import { loginSchema } from "@/lib/validators";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, password } = loginSchema.parse(body);
-    
-    // Find user
+
+    const parsed = loginSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Invalid input data" },
+        { status: 400 }
+      );
+    }
+
+    const { email, password } = parsed.data;
+
+    const normalizedEmail = normalizeEmail(email); // ✅ FIX
+
     const user = await prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail }, // ✅ FIX
     });
-    
+
     if (!user) {
       return NextResponse.json(
-        { error: 'Invalid email or password' },
+        { error: "Invalid email or password" },
         { status: 401 }
       );
     }
-    
-    // Verify password
+
     const isValid = await verifyPassword(password, user.passwordHash);
-    
+
     if (!isValid) {
       return NextResponse.json(
-        { error: 'Invalid email or password' },
+        { error: "Invalid email or password" },
         { status: 401 }
       );
     }
-    
-    // Create session
+
     await createSession(user.id);
-    
+
     return NextResponse.json({
       user: {
         id: user.id,
@@ -41,17 +55,10 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('Login error:', error);
-    
-    if (error instanceof Error && error.name === 'ZodError') {
-      return NextResponse.json(
-        { error: 'Invalid input data' },
-        { status: 400 }
-      );
-    }
-    
+    console.error("[LOGIN ERROR]", error);
+
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }
