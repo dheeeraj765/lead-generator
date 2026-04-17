@@ -1,46 +1,35 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* =========================
-   Theme Variables
-========================= */
 :root {
   --background: #f8fafc;
   --foreground: #0f172a;
-
   --primary: #3b82f6;
   --primary-dark: #1e40af;
   --primary-light: #dbeafe;
-
   --success: #10b981;
   --warning: #f59e0b;
   --danger: #ef4444;
-
   --border: #e2e8f0;
   --muted: #64748b;
 }
 
-/* Dark mode */
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0f172a;
     --foreground: #f1f5f9;
-
     --primary: #60a5fa;
     --primary-dark: #3b82f6;
     --primary-light: #1e3a8a;
-
     --success: #34d399;
     --warning: #fbbf24;
     --danger: #f87171;
-
     --border: #334155;
     --muted: #94a3b8;
   }
 }
 
-/* =========================
-   Base Styles
-========================= */
 * {
   @apply transition-colors duration-200;
 }
@@ -48,12 +37,11 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  font-family: var(--font-geist-sans);
   @apply antialiased;
 }
 
-/* =========================
-   Scrollbar
-========================= */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -72,18 +60,14 @@ body {
   background: var(--muted);
 }
 
-/* =========================
-   Form Elements
-========================= */
+/* Forms */
 input,
 select,
 textarea {
-  @apply bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 rounded-md px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500;
+  @apply bg-white dark:bg-slate-900 text-gray-900 dark:text-white;
 }
 
-/* =========================
-   Animations
-========================= */
+/* Animation */
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -99,9 +83,7 @@ textarea {
   animation: fadeIn 0.2s ease-out;
 }
 
-/* =========================
-   Utilities
-========================= */
+/* Card */
 .shadow-card {
-  @apply shadow-md border border-gray-200 dark:border-gray-700 rounded-lg;
+  @apply shadow-md border border-gray-200 dark:border-gray-700;
 }
