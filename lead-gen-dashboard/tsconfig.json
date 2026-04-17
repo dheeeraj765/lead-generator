@@ -13,16 +13,14 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
+    "plugins": [{ "name": "next" }],
+
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+
     "paths": {
-      "@/*": ["./app/*"],
-      "@/app/*": ["./app/*"],
+      "@/*": ["./*"],
       "@/lib/*": ["./app/lib/*"],
-      "@/lib/scrapers/*": ["./lib/scrapers/*"],
       "@/types": ["./app/types/index.ts"]
     }
   },
@@ -30,9 +28,7 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    ".next/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }
