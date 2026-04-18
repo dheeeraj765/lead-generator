@@ -10,25 +10,25 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    
+
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
-      
+
       const data = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(data.error || 'Login failed');
       }
-      
+
       router.push('/dashboard');
       router.refresh();
     } catch (error) {
@@ -37,7 +37,7 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
-  
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-md">
@@ -53,14 +53,14 @@ export default function LoginPage() {
               <p className="text-gray-600 dark:text-gray-400 text-sm mt-2">Welcome back to Lead Generator</p>
             </div>
           </div>
-          
+
           <form className="space-y-6" onSubmit={handleSubmit}>
             {error && (
               <div className="bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 text-red-800 dark:text-red-200 px-4 py-3 rounded-lg">
                 <p className="font-medium text-sm">{error}</p>
               </div>
             )}
-            
+
             <div className="space-y-2">
               <label htmlFor="email" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Email Address
@@ -77,7 +77,7 @@ export default function LoginPage() {
                 placeholder="you@example.com"
               />
             </div>
-            
+
             <div className="space-y-2">
               <label htmlFor="password" className="block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Password
@@ -94,7 +94,7 @@ export default function LoginPage() {
                 placeholder="••••••••"
               />
             </div>
-            
+
             <button
               type="submit"
               disabled={loading}
@@ -110,7 +110,7 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-          
+
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-gray-300 dark:border-gray-600"></div>
@@ -119,8 +119,8 @@ export default function LoginPage() {
               <span className="px-3 bg-white dark:bg-slate-900 text-gray-600 dark:text-gray-400">Don't have an account?</span>
             </div>
           </div>
-          
-          <Link 
+
+          <Link
             href="/signup"
             className="w-full px-4 py-3 border-2 border-blue-500 text-blue-600 dark:text-blue-400 font-semibold rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors text-center block"
           >
