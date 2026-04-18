@@ -7,7 +7,7 @@ export default function Navbar({ user }: { user?: { name: string; email: string 
   
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/api/login');
+    router.push('/login'); // ✅ was '/api/login'
     router.refresh();
   };
   

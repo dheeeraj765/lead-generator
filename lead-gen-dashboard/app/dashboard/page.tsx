@@ -13,11 +13,32 @@ export default function DashboardPage() {
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
   const [leads, setLeads] = useState<LeadWithoutUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userLoading, setUserLoading] = useState(true); // ✅ NEW
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  
+
+  // ✅ NEW: fetch current user on mount
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const res = await fetch('/api/auth/me');
+        if (res.status === 401) {
+          router.push('/login');
+          return;
+        }
+        const data = await res.json();
+        setUser(data.user);
+      } catch {
+        router.push('/login');
+      } finally {
+        setUserLoading(false);
+      }
+    };
+    fetchUser();
+  }, [router]);
+
   const fetchLeads = useCallback(async () => {
     try {
       const params = new URLSearchParams({
@@ -44,10 +65,15 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, [page, search, status, router]);
-  
+
   useEffect(() => {
     fetchLeads();
   }, [fetchLeads]);
+
+  // ✅ NEW: reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [search, status]);
   
   const handleStatusUpdate = async (id: string, newStatus: 'NEW' | 'CONTACTED' | 'IGNORED') => {
     try {
@@ -58,7 +84,6 @@ export default function DashboardPage() {
       });
       
       if (!response.ok) throw new Error('Update failed');
-      
       await fetchLeads();
     } catch (error) {
       console.error('Failed to update lead:', error);
@@ -69,12 +94,8 @@ export default function DashboardPage() {
     if (!confirm('Are you sure you want to delete this lead?')) return;
     
     try {
-      const response = await fetch(`/api/leads/${id}`, {
-        method: 'DELETE',
-      });
-      
+      const response = await fetch(`/api/leads/${id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error('Delete failed');
-      
       await fetchLeads();
     } catch (error) {
       console.error('Failed to delete lead:', error);
@@ -85,11 +106,10 @@ export default function DashboardPage() {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (status) params.set('status', status);
-    
     window.location.href = `/api/leads/export?${params}`;
   };
   
-  if (loading) {
+  if (loading || userLoading) { // ✅ wait for both
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-slate-800 flex items-center justify-center">
         <div className="text-center space-y-4">

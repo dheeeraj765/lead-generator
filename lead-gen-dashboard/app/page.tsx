@@ -7,7 +7,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.push('/api/login');
+    router.push('/login'); // ✅ was '/api/login'
   }, [router]);
 
   return (
